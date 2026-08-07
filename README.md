@@ -45,3 +45,10 @@
                              (print_event)      
 
 ```
+
+## License
+The source code of this project is licensed under the MIT License.
+This project uses the following third-party dependencies:
+- nlohmann/json
+- - License: MIT
+- - Repository: https://github.com/nlohmann/json.git
