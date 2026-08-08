@@ -1,14 +1,18 @@
+#include "gateway/config.hpp"
 #include "gateway/runtime.hpp"
 #include "gateway/simulator.hpp"
 
-#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -28,84 +32,77 @@ public:
     }
 };
 
-gateway::GatewayConfig make_config() {
-    using namespace std::chrono_literals;
+std::filesystem::path default_config_path() {
+    const std::filesystem::path current_directory_config{"config.json"};
+    {
+        std::ifstream input{current_directory_config, std::ios::binary};
+        if (input.is_open()) {
+            return current_directory_config;
+        }
+    }
 
-    gateway::GatewayConfig config;
-    config.raw_queue_capacity = 32;
-    config.devices = {
-        gateway::DeviceConfig{
-            .id = "machine-01",
-            .driver = "simulator_poll",
-            .connection = {},
-            .points = {
-                gateway::PointConfig{
-                    .name = "temperature",
-                    .type = gateway::ValueType::Double,
-                    .unit = "C",
-                    .address = {},
-                    .scale = 1.0,
-                    .offset = 0.0,
-                    .minimum = -40.0,
-                    .maximum = 120.0,
-                },
-                gateway::PointConfig{
-                    .name = "pressure",
-                    .type = gateway::ValueType::Double,
-                    .unit = "kPa",
-                    .address = {},
-                    .scale = 1.0,
-                    .offset = 0.0,
-                    .minimum = std::nullopt,
-                    .maximum = std::nullopt,
-                },
-            },
-        },
-        gateway::DeviceConfig{
-            .id = "vibration-feed",
-            .driver = "simulator_push",
-            .connection = {},
-            .points = {
-                gateway::PointConfig{
-                    .name = "vibration_x",
-                    .type = gateway::ValueType::Double,
-                    .unit = "g",
-                    .address = {},
-                    .scale = 1.0,
-                    .offset = 0.0,
-                    .minimum = std::nullopt,
-                    .maximum = std::nullopt,
-                },
-                gateway::PointConfig{
-                    .name = "vibration_y",
-                    .type = gateway::ValueType::Double,
-                    .unit = "g",
-                    .address = {},
-                    .scale = 1.0,
-                    .offset = 0.0,
-                    .minimum = std::nullopt,
-                    .maximum = std::nullopt,
-                },
-            },
-        },
-    };
-    config.groups = {
-        gateway::CollectionGroup{
-            .id = "temperature-group",
-            .device_id = "machine-01",
-            .interval = 300ms,
-            .timeout = 150ms,
-            .points = {"temperature"},
-        },
-        gateway::CollectionGroup{
-            .id = "pressure-group",
-            .device_id = "machine-01",
-            .interval = 300ms,
-            .timeout = 150ms,
-            .points = {"pressure"},
-        },
-    };
-    return config;
+    // Make the source-tree invocation convenient without depending on argv[0]
+    // encoding, which is not reliable for non-ASCII Windows working paths.
+    const std::filesystem::path source_tree_config{"example/config.json"};
+    {
+        std::ifstream input{source_tree_config, std::ios::binary};
+        if (input.is_open()) {
+            return source_tree_config;
+        }
+    }
+    return current_directory_config;
+}
+
+std::vector<gateway::DriverInstance> make_drivers(
+    const std::vector<gateway::DriverConfig>& configs) {
+    std::vector<gateway::DriverInstance> drivers;
+    drivers.reserve(configs.size());
+    for (const auto& config : configs) {
+        std::unique_ptr<gateway::IProtocolDriver> driver;
+        if (const auto* poll =
+                std::get_if<gateway::PollSimulatorConfig>(&config.settings)) {
+            driver = std::make_unique<gateway::PollSimulatorDriver>(poll->latency);
+        } else if (const auto* push =
+                       std::get_if<gateway::PushSimulatorConfig>(&config.settings)) {
+            driver = std::make_unique<gateway::PushSimulatorDriver>(push->interval);
+        } else {
+            throw std::logic_error{"unsupported driver configuration"};
+        }
+        drivers.push_back(gateway::DriverInstance{
+            .device_id = config.device_id,
+            .driver = std::move(driver),
+        });
+    }
+    return drivers;
+}
+
+std::vector<std::unique_ptr<gateway::IDataProcessor>> make_processors(
+    const std::vector<gateway::ProcessorConfig>& configs) {
+    std::vector<std::unique_ptr<gateway::IDataProcessor>> processors;
+    processors.reserve(configs.size());
+    for (const auto& config : configs) {
+        if (const auto* threshold =
+                std::get_if<gateway::ThresholdProcessorConfig>(&config)) {
+            processors.push_back(std::make_unique<gateway::ThresholdProcessor>(
+                threshold->input, threshold->greater_than, threshold->output));
+        } else if (const auto* average =
+                       std::get_if<gateway::WindowAverageProcessorConfig>(&config)) {
+            processors.push_back(std::make_unique<gateway::WindowAverageProcessor>(
+                average->input, average->window, average->output));
+        } else if (const auto* inference =
+                       std::get_if<gateway::InferenceProcessorConfig>(&config)) {
+            if (inference->runner != "demo_rms") {
+                throw std::logic_error{"unsupported model runner configuration"};
+            }
+            processors.push_back(std::make_unique<gateway::InferenceProcessor>(
+                inference->inputs,
+                inference->outputs,
+                std::make_shared<DemoModelRunner>()));
+        } else {
+            throw std::logic_error{"unsupported processor configuration"};
+        }
+    }
+    return processors;
 }
 
 void print_event(const gateway::Event& event) {
@@ -131,44 +128,15 @@ void print_event(const gateway::Event& event) {
 int main(int argc, char** argv) {
     using namespace std::chrono_literals;
 
-    std::chrono::milliseconds run_for{2200};
-    if (argc == 2) {
-        try {
-            run_for = std::chrono::milliseconds{std::stoll(argv[1])};
-        } catch (...) {
-            std::cerr << "usage: gateway_example [run_duration_ms]\n";
-            return EXIT_FAILURE;
-        }
-        if (run_for <= 0ms) {
-            std::cerr << "run_duration_ms must be positive\n";
-            return EXIT_FAILURE;
-        }
-    }
-
-    auto config = make_config();
-    std::vector<gateway::DriverInstance> drivers;
-    drivers.push_back(gateway::DriverInstance{
-        .device_id = "machine-01",
-        .driver = std::make_unique<gateway::PollSimulatorDriver>(35ms),
-    });
-    drivers.push_back(gateway::DriverInstance{
-        .device_id = "vibration-feed",
-        .driver = std::make_unique<gateway::PushSimulatorDriver>(180ms),
-    });
-
-    std::vector<std::unique_ptr<gateway::IDataProcessor>> processors;
-    processors.push_back(std::make_unique<gateway::ThresholdProcessor>(
-        "temperature", 85.0, "temperature_alarm"));
-    processors.push_back(std::make_unique<gateway::WindowAverageProcessor>(
-        "vibration_x", 3, "vibration_x_avg"));
-    processors.push_back(std::make_unique<gateway::InferenceProcessor>(
-        std::vector<std::string>{"vibration_x", "vibration_y"},
-        std::vector<std::string>{"anomaly_score"},
-        std::make_shared<DemoModelRunner>()));
-
     try {
+        const auto config_path = default_config_path();
+        auto config = gateway::load_config(config_path);
+        auto drivers = make_drivers(config.drivers);
+        auto processors = make_processors(config.processors);
+        const auto run_for = config.run_duration;
+
         gateway::GatewayRuntime runtime{
-            std::move(config), std::move(drivers), std::move(processors), print_event};
+            std::move(config.gateway), std::move(drivers), std::move(processors), print_event};
         runtime.start();
         std::this_thread::sleep_for(run_for);
         runtime.stop();
