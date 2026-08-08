@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -16,13 +17,14 @@ using SchedulerClock = std::chrono::steady_clock;
 using TimePoint = SchedulerClock::time_point;
 
 struct ScheduleTask {
-    std::string id;
     std::string group_id;
     std::chrono::milliseconds interval{};
     TimePoint next_due{};
     std::size_t stable_order{};
     std::uint64_t skipped_cycles{};
 };
+
+using PollCallback = std::function<void(const ScheduleTask&)>;
 
 class ISchedulePolicy {
 public:
@@ -47,17 +49,10 @@ private:
     std::vector<ScheduleTask> tasks_;
 };
 
-class ICollectionExecutor {
-public:
-    virtual ~ICollectionExecutor() = default;
-    virtual void execute(const ScheduleTask& task) = 0;
-};
-
 // Timing fields are cumulative nanoseconds across all execution attempts.
 struct SchedulerStats {
     std::uint64_t executed{};
     std::uint64_t errors{};
-    std::uint64_t max_active_poll{};
     std::uint64_t lateness_ns{};
     std::uint64_t duration_ns{};
     std::uint64_t skipped_cycles{};
@@ -66,7 +61,7 @@ struct SchedulerStats {
 class SchedulerEngine final {
 public:
     SchedulerEngine(std::unique_ptr<ISchedulePolicy> policy,
-                    ICollectionExecutor& executor);
+                    PollCallback poll);
     ~SchedulerEngine();
 
     SchedulerEngine(const SchedulerEngine&) = delete;
@@ -85,14 +80,13 @@ private:
     void run();
 
     std::unique_ptr<ISchedulePolicy> policy_;
-    ICollectionExecutor& executor_;
+    PollCallback poll_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::jthread worker_;
     bool started_{false};
     bool stopping_{false};
-    std::uint64_t active_poll_{0};
     SchedulerStats stats_{};
 };
 

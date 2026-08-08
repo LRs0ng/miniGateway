@@ -10,24 +10,6 @@
 namespace gateway {
 namespace {
 
-Quality map_quality(SampleStatus status) {
-    switch (status) {
-        case SampleStatus::Good:
-            return Quality::Good;
-        case SampleStatus::Timeout:
-            return Quality::Timeout;
-        case SampleStatus::Disconnected:
-            return Quality::Disconnected;
-        case SampleStatus::DecodeError:
-            return Quality::DecodeError;
-        case SampleStatus::OutOfRange:
-            return Quality::OutOfRange;
-        case SampleStatus::Bad:
-            return Quality::Bad;
-    }
-    return Quality::Bad;
-}
-
 std::optional<bool> boolean_value(const Scalar& value) {
     return std::visit(
         [](const auto& item) -> std::optional<bool> {
@@ -145,7 +127,7 @@ Event Normalizer::normalize(RawBatch batch) {
 
     const auto device = points_.find(event.device_id);
     for (auto& sample : batch.samples) {
-        Quality quality = map_quality(sample.status);
+        Quality quality = sample.status;
         Scalar value = std::move(sample.value);
         std::string unit;
 

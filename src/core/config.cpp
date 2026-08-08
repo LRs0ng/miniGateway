@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -90,15 +91,15 @@ std::string string_member(
         allow_empty);
 }
 
-bool bool_member(
-    const Json& object,
-    std::string_view key,
-    std::string_view path) {
-    const auto& value = member(object, key, path);
-    if (!value.is_boolean()) {
-        fail(std::string{path} + "." + std::string{key}, "must be a boolean");
+bool optional_enabled(const Json& object, std::string_view path) {
+    const auto item = object.find("enabled");
+    if (item == object.end()) {
+        return true;
     }
-    return value.get<bool>();
+    if (!item->is_boolean()) {
+        fail(std::string{path} + ".enabled", "must be a boolean");
+    }
+    return item->get<bool>();
 }
 
 std::uint64_t unsigned_integer_value(
@@ -156,53 +157,20 @@ std::chrono::milliseconds milliseconds_member(
     return std::chrono::milliseconds{static_cast<Rep>(value)};
 }
 
-int int_member_in_range(
-    const Json& object,
-    std::string_view key,
-    std::string_view path,
-    int minimum,
-    int maximum) {
-    const auto value = unsigned_integer_member(object, key, path);
-    if (value < static_cast<std::uint64_t>(minimum) ||
-        value > static_cast<std::uint64_t>(maximum)) {
-        fail(
-            std::string{path} + "." + std::string{key},
-            "must be in range " + std::to_string(minimum) + ".." +
-                std::to_string(maximum));
-    }
-    return static_cast<int>(value);
-}
-
-unsigned unsigned_member(
-    const Json& object,
-    std::string_view key,
-    std::string_view path) {
-    const auto value = unsigned_integer_member(object, key, path);
-    if (value > static_cast<std::uint64_t>(
-                    std::numeric_limits<unsigned>::max())) {
-        fail(std::string{path} + "." + std::string{key}, "is too large");
-    }
-    return static_cast<unsigned>(value);
-}
-
-double finite_number_value(const Json& value, std::string_view path) {
-    if (!value.is_number()) {
-        fail(path, "must be a number");
-    }
-    const auto result = value.get<double>();
-    if (!std::isfinite(result)) {
-        fail(path, "must be finite");
-    }
-    return result;
-}
-
 double finite_number_member(
     const Json& object,
     std::string_view key,
     std::string_view path) {
-    return finite_number_value(
-        member(object, key, path),
-        std::string{path} + "." + std::string{key});
+    const auto& value = member(object, key, path);
+    const auto field_path = std::string{path} + "." + std::string{key};
+    if (!value.is_number()) {
+        fail(field_path, "must be a number");
+    }
+    const auto result = value.get<double>();
+    if (!std::isfinite(result)) {
+        fail(field_path, "must be finite");
+    }
+    return result;
 }
 
 std::optional<double> optional_number_member(
@@ -213,8 +181,15 @@ std::optional<double> optional_number_member(
     if (item == object.end() || item->is_null()) {
         return std::nullopt;
     }
-    return finite_number_value(
-        *item, std::string{path} + "." + std::string{key});
+    const auto field_path = std::string{path} + "." + std::string{key};
+    if (!item->is_number()) {
+        fail(field_path, "must be a number or null");
+    }
+    const auto result = item->get<double>();
+    if (!std::isfinite(result)) {
+        fail(field_path, "must be finite");
+    }
+    return result;
 }
 
 std::unordered_map<std::string, std::string> string_map(
@@ -237,11 +212,8 @@ std::vector<std::string> string_array(
     const Json& value,
     std::string_view path,
     bool require_non_empty) {
-    if (!value.is_array()) {
-        fail(path, "must be an array");
-    }
-    if (require_non_empty && value.empty()) {
-        fail(path, "must not be empty");
+    if (!value.is_array() || (require_non_empty && value.empty())) {
+        fail(path, require_non_empty ? "must be a non-empty array" : "must be an array");
     }
 
     std::vector<std::string> result;
@@ -301,8 +273,7 @@ PointConfig parse_point(const Json& value, std::string_view path) {
 void parse_devices(
     const Json& root,
     ApplicationConfig& config,
-    std::unordered_map<std::string, std::unordered_set<std::string>>& points,
-    std::unordered_map<std::string, std::string>& driver_types) {
+    std::unordered_map<std::string, std::unordered_set<std::string>>& points) {
     const auto& devices = array_member(root, "devices", "root");
     if (devices.empty()) {
         fail("root.devices", "must not be empty");
@@ -310,7 +281,6 @@ void parse_devices(
 
     std::unordered_set<std::string> device_ids;
     config.gateway.devices.reserve(devices.size());
-    config.drivers.reserve(devices.size());
     for (std::size_t index = 0; index < devices.size(); ++index) {
         const auto path = "root.devices[" + std::to_string(index) + "]";
         const auto& value = devices[index];
@@ -323,7 +293,9 @@ void parse_devices(
         if (!device_ids.insert(device.id).second) {
             fail(path + ".id", "duplicate device id '" + device.id + "'");
         }
-        device.driver = string_member(value, "driver", path);
+        device.driver.type = string_member(value, "driver", path);
+        device.driver.settings_json =
+            object_member(value, "driver_config", path).dump();
         device.connection = string_map(
             member(value, "connection", path), path + ".connection");
 
@@ -344,35 +316,14 @@ void parse_devices(
             }
             device.points.push_back(std::move(point));
         }
-
-        const auto& driver_config = object_member(value, "driver_config", path);
-        DriverConfig driver;
-        driver.device_id = device.id;
-        if (device.driver == "simulator_poll") {
-            driver.settings = PollSimulatorConfig{
-                .latency = milliseconds_member(
-                    driver_config, "latency_ms", path + ".driver_config", false),
-            };
-        } else if (device.driver == "simulator_push") {
-            driver.settings = PushSimulatorConfig{
-                .interval = milliseconds_member(
-                    driver_config, "interval_ms", path + ".driver_config", true),
-            };
-        } else {
-            fail(path + ".driver", "unsupported driver '" + device.driver + "'");
-        }
-
-        driver_types.emplace(device.id, device.driver);
         config.gateway.devices.push_back(std::move(device));
-        config.drivers.push_back(std::move(driver));
     }
 }
 
 void parse_groups(
     const Json& root,
     ApplicationConfig& config,
-    const std::unordered_map<std::string, std::unordered_set<std::string>>& points,
-    const std::unordered_map<std::string, std::string>& driver_types) {
+    const std::unordered_map<std::string, std::unordered_set<std::string>>& points) {
     const auto& groups = array_member(root, "groups", "root");
     std::unordered_set<std::string> group_ids;
     config.gateway.groups.reserve(groups.size());
@@ -398,9 +349,6 @@ void parse_groups(
         if (device_points == points.end()) {
             fail(path + ".device_id", "references an unknown device");
         }
-        if (driver_types.at(group.device_id) != "simulator_poll") {
-            fail(path + ".device_id", "push device cannot own a collection group");
-        }
         for (const auto& point : group.points) {
             if (!device_points->second.contains(point)) {
                 fail(path + ".points", "references unknown point '" + point + "'");
@@ -410,92 +358,33 @@ void parse_groups(
     }
 }
 
-void parse_processors(
+std::vector<PluginConfig> parse_plugins(
     const Json& root,
-    ApplicationConfig& config,
-    const std::unordered_map<std::string, std::unordered_set<std::string>>& points) {
-    const auto& processors = array_member(root, "processors", "root");
-    std::unordered_set<std::string> available_points;
-    for (const auto& [device_id, device_points] : points) {
-        static_cast<void>(device_id);
-        available_points.insert(device_points.begin(), device_points.end());
-    }
+    std::string_view key) {
+    const auto& values = array_member(root, key, "root");
+    const auto base_path = "root." + std::string{key};
+    std::unordered_set<std::string> ids;
+    std::vector<PluginConfig> result;
+    result.reserve(values.size());
 
-    auto require_input = [&available_points](
-                             const std::string& input,
-                             const std::string& path) {
-        if (!available_points.contains(input)) {
-            fail(path, "references unknown input point '" + input + "'");
-        }
-    };
-    auto add_output = [&available_points](
-                          const std::string& output,
-                          const std::string& path) {
-        if (!available_points.insert(output).second) {
-            fail(path, "duplicates an existing or derived point '" + output + "'");
-        }
-    };
-
-    config.processors.reserve(processors.size());
-    for (std::size_t index = 0; index < processors.size(); ++index) {
-        const auto path = "root.processors[" + std::to_string(index) + "]";
-        const auto& value = processors[index];
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        const auto path = base_path + "[" + std::to_string(index) + "]";
+        const auto& value = values[index];
         if (!value.is_object()) {
             fail(path, "must be an object");
         }
-        const auto type = string_member(value, "type", path);
-        if (type == "threshold") {
-            auto threshold = ThresholdProcessorConfig{
-                .input = string_member(value, "input", path),
-                .greater_than = finite_number_member(value, "greater_than", path),
-                .output = string_member(value, "output", path),
-            };
-            require_input(threshold.input, path + ".input");
-            add_output(threshold.output, path + ".output");
-            config.processors.push_back(std::move(threshold));
-        } else if (type == "window_average") {
-            auto average = WindowAverageProcessorConfig{
-                .input = string_member(value, "input", path),
-                .window = size_member(value, "window", path, true),
-                .output = string_member(value, "output", path),
-            };
-            require_input(average.input, path + ".input");
-            add_output(average.output, path + ".output");
-            config.processors.push_back(std::move(average));
-        } else if (type == "inference") {
-            auto inference = InferenceProcessorConfig{
-                .runner = string_member(value, "runner", path),
-                .inputs = string_array(
-                    member(value, "inputs", path), path + ".inputs", true),
-                .outputs = string_array(
-                    member(value, "outputs", path), path + ".outputs", true),
-            };
-            if (inference.runner != "demo_rms") {
-                fail(path + ".runner", "unsupported model runner '" +
-                    inference.runner + "'");
-            }
-            if (inference.outputs.size() != 1) {
-                fail(path + ".outputs", "demo_rms requires exactly one output");
-            }
-            for (std::size_t input_index = 0;
-                 input_index < inference.inputs.size();
-                 ++input_index) {
-                require_input(
-                    inference.inputs[input_index],
-                    path + ".inputs[" + std::to_string(input_index) + "]");
-            }
-            for (std::size_t output_index = 0;
-                 output_index < inference.outputs.size();
-                 ++output_index) {
-                add_output(
-                    inference.outputs[output_index],
-                    path + ".outputs[" + std::to_string(output_index) + "]");
-            }
-            config.processors.push_back(std::move(inference));
-        } else {
-            fail(path + ".type", "unsupported processor '" + type + "'");
+        PluginConfig plugin{
+            .id = string_member(value, "id", path),
+            .type = string_member(value, "type", path),
+            .enabled = optional_enabled(value, path),
+            .settings_json = object_member(value, "config", path).dump(),
+        };
+        if (!ids.insert(plugin.id).second) {
+            fail(path + ".id", "duplicate plugin id '" + plugin.id + "'");
         }
+        result.push_back(std::move(plugin));
     }
+    return result;
 }
 
 ApplicationConfig parse_application_config(const Json& root) {
@@ -511,10 +400,10 @@ ApplicationConfig parse_application_config(const Json& root) {
         runtime, "raw_queue_capacity", "root.runtime", true);
 
     std::unordered_map<std::string, std::unordered_set<std::string>> points;
-    std::unordered_map<std::string, std::string> driver_types;
-    parse_devices(root, config, points, driver_types);
-    parse_groups(root, config, points, driver_types);
-    parse_processors(root, config, points);
+    parse_devices(root, config, points);
+    parse_groups(root, config, points);
+    config.processors = parse_plugins(root, "processors");
+    config.event_publishers = parse_plugins(root, "event_publishers");
     return config;
 }
 

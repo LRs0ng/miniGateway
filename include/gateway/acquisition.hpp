@@ -4,14 +4,11 @@
 #include "gateway/model.hpp"
 #include "gateway/scheduler.hpp"
 
-#include <atomic>
-#include <chrono>
+#include <cstdint>
 #include <functional>
-#include <mutex>
+#include <memory>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace gateway {
 
@@ -22,13 +19,6 @@ enum class AcquisitionMode {
 
 struct DriverCapabilities {
     AcquisitionMode mode{AcquisitionMode::Poll};
-    bool supports_write{false};
-};
-
-struct CompiledPlan {
-    std::string group_id;
-    std::string device_id;
-    std::vector<std::string> points;
 };
 
 using SampleSink = std::function<EnqueueResult(RawBatch&&)>;
@@ -42,50 +32,21 @@ public:
     virtual void start() = 0;
     virtual void stop() noexcept = 0;
 
-    virtual CompiledPlan compile(const CollectionGroup&) {
-        throw std::logic_error("driver does not support polling");
-    }
-
-    virtual RawBatch poll(const CompiledPlan&, TimePoint) {
+    virtual RawBatch poll(const CollectionGroup&, TimePoint) {
         throw std::logic_error("driver does not support polling");
     }
 };
 
-struct ExecutorStats {
+struct DriverInstance {
+    std::string device_id;
+    std::unique_ptr<IProtocolDriver> driver;
+};
+
+struct AcquisitionStats {
     std::uint64_t polls{0};
     std::uint64_t errors{0};
     std::uint64_t deadline_misses{0};
     std::uint64_t queue_full{0};
-    std::uint64_t max_active_poll{0};
-};
-
-class SequentialExecutor final : public ICollectionExecutor {
-public:
-    explicit SequentialExecutor(SampleSink sink);
-
-    void bind(
-        const CollectionGroup& group,
-        IProtocolDriver& driver,
-        CompiledPlan plan);
-    void execute(const ScheduleTask& task) override;
-
-    [[nodiscard]] ExecutorStats stats() const;
-
-private:
-    struct Binding {
-        CollectionGroup group;
-        IProtocolDriver* driver{nullptr};
-        CompiledPlan plan;
-    };
-
-    SampleSink sink_;
-    std::unordered_map<std::string, Binding> bindings_;
-    std::atomic<std::uint64_t> polls_{0};
-    std::atomic<std::uint64_t> errors_{0};
-    std::atomic<std::uint64_t> deadline_misses_{0};
-    std::atomic<std::uint64_t> queue_full_{0};
-    std::atomic<std::uint64_t> active_poll_{0};
-    std::atomic<std::uint64_t> max_active_poll_{0};
 };
 
 }  // namespace gateway

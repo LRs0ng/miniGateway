@@ -25,19 +25,20 @@ void saturating_add(std::uint64_t& target, std::uint64_t value) noexcept {
 FixedIntervalSequentialPolicy::FixedIntervalSequentialPolicy(
     std::vector<ScheduleTask> tasks)
     : tasks_(std::move(tasks)) {
-    std::unordered_set<std::string> task_ids;
-    task_ids.reserve(tasks_.size());
+    std::unordered_set<std::string> group_ids;
+    group_ids.reserve(tasks_.size());
 
     for (const auto& task : tasks_) {
-        if (task.id.empty()) {
-            throw std::invalid_argument("schedule task id must not be empty");
+        if (task.group_id.empty()) {
+            throw std::invalid_argument("schedule group id must not be empty");
         }
         if (task.interval <= std::chrono::milliseconds::zero()) {
             throw std::invalid_argument("schedule task interval must be positive: " +
-                                        task.id);
+                                        task.group_id);
         }
-        if (!task_ids.insert(task.id).second) {
-            throw std::invalid_argument("duplicate schedule task id: " + task.id);
+        if (!group_ids.insert(task.group_id).second) {
+            throw std::invalid_argument(
+                "duplicate schedule group id: " + task.group_id);
         }
     }
 }
@@ -92,10 +93,13 @@ const std::vector<ScheduleTask>& FixedIntervalSequentialPolicy::tasks() const
 }
 
 SchedulerEngine::SchedulerEngine(std::unique_ptr<ISchedulePolicy> policy,
-                                 ICollectionExecutor& executor)
-    : policy_(std::move(policy)), executor_(executor) {
+                                 PollCallback poll)
+    : policy_(std::move(policy)), poll_(std::move(poll)) {
     if (policy_ == nullptr) {
         throw std::invalid_argument("schedule policy must not be null");
+    }
+    if (!poll_) {
+        throw std::invalid_argument("poll callback must not be empty");
     }
 }
 
@@ -157,21 +161,17 @@ void SchedulerEngine::run() {
 
         const auto scheduled_at = task->next_due;
         const auto started_at = SchedulerClock::now();
-        ++active_poll_;
-        stats_.max_active_poll =
-            std::max(stats_.max_active_poll, active_poll_);
 
         lock.unlock();
         bool failed = false;
         try {
-            executor_.execute(*task);
+            poll_(*task);
         } catch (...) {
             failed = true;
         }
         const auto finished_at = SchedulerClock::now();
         lock.lock();
 
-        --active_poll_;
         ++stats_.executed;
         if (failed) {
             ++stats_.errors;

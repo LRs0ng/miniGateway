@@ -77,22 +77,64 @@
   ],
   "processors": [
     {
+      "id": "temperature-alarm",
       "type": "threshold",
-      "input": "temperature",
-      "greater_than": 85.0,
-      "output": "temperature_alarm"
+      "enabled": true,
+      "config": {
+        "input": "temperature",
+        "greater_than": 85.0,
+        "output": "temperature_alarm"
+      }
     },
     {
+      "id": "vibration-average",
       "type": "window_average",
-      "input": "vibration_x",
-      "window": 3,
-      "output": "vibration_x_avg"
+      "enabled": true,
+      "config": {
+        "input": "vibration_x",
+        "window": 3,
+        "output": "vibration_x_avg"
+      }
     },
     {
+      "id": "vibration-rms",
       "type": "inference",
-      "runner": "demo_rms",
-      "inputs": ["vibration_x", "vibration_y"],
-      "outputs": ["anomaly_score"]
+      "enabled": true,
+      "config": {
+        "runner": "demo_rms",
+        "inputs": ["vibration_x", "vibration_y"],
+        "outputs": ["anomaly_score"]
+      }
+    }
+  ],
+  "event_publishers": [
+    {
+      "id": "console",
+      "type": "print",
+      "enabled": true,
+      "config": {
+        "include_readings": true
+      }
+    },
+    {
+      "id": "mqtt",
+      "type": "mqtt",
+      "enabled": false,
+      "config": {
+        "host": "127.0.0.1",
+        "port": 1883,
+        "keepalive": 30,
+        "client_id": "edge-gateway",
+        "topic_prefix": "edge/events",
+        "qos": 1,
+        "retain": false,
+        "clean_session": true,
+        "username": "",
+        "password": "",
+        "reconnect_delay": 1,
+        "reconnect_delay_max": 30,
+        "reconnect_exponential_backoff": true
+      }
     }
   ]
 }

@@ -20,15 +20,6 @@ enum class ValueType {
     String,
 };
 
-enum class SampleStatus {
-    Good,
-    Timeout,
-    Disconnected,
-    DecodeError,
-    OutOfRange,
-    Bad,
-};
-
 enum class Quality {
     Good,
     Timeout,
@@ -49,9 +40,14 @@ struct PointConfig {
     std::optional<double> maximum;
 };
 
+struct PluginSpec {
+    std::string type;
+    std::string settings_json{"{}"};
+};
+
 struct DeviceConfig {
     std::string id;
-    std::string driver;
+    PluginSpec driver;
     std::unordered_map<std::string, std::string> connection;
     std::vector<PointConfig> points;
 };
@@ -73,7 +69,7 @@ struct GatewayConfig {
 struct RawSample {
     std::string point;
     Scalar value;
-    SampleStatus status{SampleStatus::Good};
+    Quality status{Quality::Good};
     std::int64_t source_time_ns{0};
 };
 

@@ -11,22 +11,14 @@ GatewayRuntime::GatewayRuntime(
     GatewayConfig config,
     std::vector<DriverInstance> drivers,
     std::vector<std::unique_ptr<IDataProcessor>> processors,
-    FinalEventHandler event_handler)
+    std::vector<EventPublisherInstance> event_publishers)
     : config_(std::move(config)),
       drivers_(std::move(drivers)),
-      event_handler_(std::move(event_handler)),
+      event_publishers_(std::move(event_publishers)),
       raw_queue_(config_.raw_queue_capacity),
       normalizer_(config_),
       pipeline_(std::move(processors)) {
-    if (!event_handler_) {
-        throw std::invalid_argument("final event handler is required");
-    }
-
-    auto sink = [this](RawBatch&& batch) {
-        return raw_queue_.try_push(std::move(batch));
-    };
-    executor_ = std::make_unique<SequentialExecutor>(sink);
-    validate_and_bind();
+    validate_and_configure();
 }
 
 GatewayRuntime::~GatewayRuntime() {
@@ -42,7 +34,12 @@ void GatewayRuntime::start() {
 
     processing_worker_ = std::jthread([this] { process_batches(); });
     std::size_t started_drivers = 0;
+    std::size_t started_publishers = 0;
     try {
+        for (auto& instance : event_publishers_) {
+            instance.publisher->start();
+            ++started_publishers;
+        }
         for (auto& instance : drivers_) {
             instance.driver->start();
             ++started_drivers;
@@ -54,7 +51,6 @@ void GatewayRuntime::start() {
         for (std::size_t index = 0; index < config_.groups.size(); ++index) {
             const auto& group = config_.groups[index];
             tasks.push_back(ScheduleTask{
-                .id = group.id,
                 .group_id = group.id,
                 .interval = group.interval,
                 .next_due = start_time + group.interval,
@@ -65,7 +61,8 @@ void GatewayRuntime::start() {
         auto policy = std::make_unique<FixedIntervalSequentialPolicy>(
             std::move(tasks));
         scheduler_ = std::make_unique<SchedulerEngine>(
-            std::move(policy), *executor_);
+            std::move(policy),
+            [this](const ScheduleTask& task) { poll_group(task); });
         scheduler_->start();
     } catch (...) {
         if (scheduler_) {
@@ -78,6 +75,10 @@ void GatewayRuntime::start() {
         raw_queue_.close();
         if (processing_worker_.joinable()) {
             processing_worker_.join();
+        }
+        while (started_publishers > 0) {
+            --started_publishers;
+            event_publishers_[started_publishers].publisher->stop();
         }
         stopped_ = true;
         throw;
@@ -113,6 +114,11 @@ void GatewayRuntime::stop() noexcept {
     if (processing_worker_.joinable()) {
         processing_worker_.join();
     }
+    for (auto instance = event_publishers_.rbegin();
+         instance != event_publishers_.rend();
+         ++instance) {
+        instance->publisher->stop();
+    }
 }
 
 RuntimeStats GatewayRuntime::stats() const {
@@ -120,15 +126,27 @@ RuntimeStats GatewayRuntime::stats() const {
         .raw_queue = raw_queue_.stats(),
         .normalizer = normalizer_.stats(),
         .processing = pipeline_.stats(),
+        .acquisition = AcquisitionStats{
+            .polls = polls_.load(std::memory_order_relaxed),
+            .errors = poll_errors_.load(std::memory_order_relaxed),
+            .deadline_misses =
+                deadline_misses_.load(std::memory_order_relaxed),
+            .queue_full = poll_queue_full_.load(std::memory_order_relaxed),
+        },
         .scheduler = scheduler_ ? scheduler_->stats() : SchedulerStats{},
-        .executor = executor_->stats(),
+        .event_publishers = EventPublisherStats{
+            .attempts = event_publish_attempts_.load(std::memory_order_relaxed),
+            .accepted = event_publish_accepted_.load(std::memory_order_relaxed),
+            .unavailable =
+                event_publish_unavailable_.load(std::memory_order_relaxed),
+            .rejected = event_publish_rejected_.load(std::memory_order_relaxed),
+            .errors = event_publish_errors_.load(std::memory_order_relaxed),
+        },
         .delivered_events = delivered_events_.load(std::memory_order_relaxed),
-        .event_handler_errors =
-            event_handler_errors_.load(std::memory_order_relaxed),
     };
 }
 
-void GatewayRuntime::validate_and_bind() {
+void GatewayRuntime::validate_and_configure() {
     std::unordered_set<std::string> driver_devices;
     for (auto& instance : drivers_) {
         if (instance.device_id.empty() || !instance.driver) {
@@ -165,7 +183,40 @@ void GatewayRuntime::validate_and_bind() {
             throw std::invalid_argument(
                 "push device cannot own a collection group: " + group.id);
         }
-        executor_->bind(group, driver, driver.compile(group));
+    }
+
+    std::unordered_set<std::string> publisher_ids;
+    for (auto& instance : event_publishers_) {
+        if (instance.id.empty() || !instance.publisher) {
+            throw std::invalid_argument(
+                "every event publisher instance needs an id and publisher");
+        }
+        if (!publisher_ids.insert(instance.id).second) {
+            throw std::invalid_argument(
+                "duplicate event publisher: " + instance.id);
+        }
+        instance.publisher->configure(config_);
+    }
+}
+
+void GatewayRuntime::poll_group(const ScheduleTask& task) {
+    try {
+        const auto& group = find_group(task.group_id);
+        auto& driver = find_driver(group.device_id);
+        const auto deadline = SchedulerClock::now() + group.timeout;
+        auto batch = driver.poll(group, deadline);
+        if (SchedulerClock::now() > deadline) {
+            deadline_misses_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        const auto result = raw_queue_.try_push(std::move(batch));
+        if (result == EnqueueResult::Full) {
+            poll_queue_full_.fetch_add(1, std::memory_order_relaxed);
+        }
+        polls_.fetch_add(1, std::memory_order_relaxed);
+    } catch (...) {
+        poll_errors_.fetch_add(1, std::memory_order_relaxed);
+        throw;
     }
 }
 
@@ -175,14 +226,34 @@ void GatewayRuntime::process_batches() {
         try {
             auto event = normalizer_.normalize(std::move(batch));
             pipeline_.process(event);
-            try {
-                event_handler_(event);
-                delivered_events_.fetch_add(1, std::memory_order_relaxed);
-            } catch (...) {
-                event_handler_errors_.fetch_add(1, std::memory_order_relaxed);
+            delivered_events_.fetch_add(1, std::memory_order_relaxed);
+            publish_event(event);
+        } catch (...) {
+            // A malformed batch must not terminate the processing worker.
+        }
+    }
+}
+
+void GatewayRuntime::publish_event(const Event& event) {
+    for (auto& instance : event_publishers_) {
+        event_publish_attempts_.fetch_add(1, std::memory_order_relaxed);
+        try {
+            switch (instance.publisher->publish(event)) {
+                case EventPublishResult::Accepted:
+                    event_publish_accepted_.fetch_add(
+                        1, std::memory_order_relaxed);
+                    break;
+                case EventPublishResult::Unavailable:
+                    event_publish_unavailable_.fetch_add(
+                        1, std::memory_order_relaxed);
+                    break;
+                case EventPublishResult::Rejected:
+                    event_publish_rejected_.fetch_add(
+                        1, std::memory_order_relaxed);
+                    break;
             }
         } catch (...) {
-            event_handler_errors_.fetch_add(1, std::memory_order_relaxed);
+            event_publish_errors_.fetch_add(1, std::memory_order_relaxed);
         }
     }
 }
@@ -195,6 +266,17 @@ const DeviceConfig& GatewayRuntime::find_device(const std::string& device_id) co
         throw std::invalid_argument("driver references unknown device: " + device_id);
     }
     return *device;
+}
+
+const CollectionGroup& GatewayRuntime::find_group(
+    const std::string& group_id) const {
+    const auto group = std::find_if(
+        config_.groups.begin(), config_.groups.end(),
+        [&group_id](const CollectionGroup& item) { return item.id == group_id; });
+    if (group == config_.groups.end()) {
+        throw std::out_of_range("scheduled collection group was not found: " + group_id);
+    }
+    return *group;
 }
 
 IProtocolDriver& GatewayRuntime::find_driver(const std::string& device_id) const {
