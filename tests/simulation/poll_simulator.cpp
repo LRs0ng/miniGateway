@@ -1,6 +1,7 @@
 #include "simulator.hpp"
 
 #include "plugin_support/plugin_json.hpp"
+#include "gateway/plugin_api.hpp"
 #include "simulation_support.hpp"
 
 #include <stdexcept>
@@ -8,6 +9,15 @@
 
 namespace gateway {
 namespace {
+
+std::unique_ptr<PollSimulatorDriver> make_poll_simulator(
+    std::string_view settings_json) {
+    constexpr std::string_view plugin{"poll simulator"};
+    const auto settings =
+        plugin_json::parse_object(settings_json, plugin);
+    return std::make_unique<PollSimulatorDriver>(
+        plugin_json::milliseconds_member(settings, "latency_ms", plugin));
+}
 
 RawBatch timeout_batch(const CollectionGroup& group) {
     RawBatch batch{
@@ -98,18 +108,20 @@ RawBatch PollSimulatorDriver::poll(
     return batch;
 }
 
-void register_poll_simulator_plugin(PluginRegistry& registry) {
-    registry.register_driver(
-        "simulator_poll",
-        [](std::string_view settings_json)
-            -> std::unique_ptr<IProtocolDriver> {
-            constexpr std::string_view plugin{"poll simulator"};
-            const auto settings =
-                plugin_json::parse_object(settings_json, plugin);
-            return std::make_unique<PollSimulatorDriver>(
-                plugin_json::milliseconds_member(
-                    settings, "latency_ms", plugin));
-        });
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void* create_plugin(
+    const char* settings_json) {
+    try {
+        return make_poll_simulator(
+                   settings_json == nullptr ? std::string_view{"{}"}
+                                             : std::string_view{settings_json})
+            .release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void destroy_plugin(void* plugin) {
+    delete static_cast<PollSimulatorDriver*>(plugin);
 }
 
 }  // namespace gateway

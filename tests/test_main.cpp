@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -296,16 +297,22 @@ void registry_creates_only_enabled_generic_plugins() {
     gateway::ApplicationConfig config;
     config.gateway.devices.push_back(gateway::DeviceConfig{
         .id = "device",
-        .driver = {.type = "stub-driver", .settings_json = "{}"},
+        .driver = {
+            .type = "stub-driver",
+            .settings_json = "{}",
+            .library = {},
+        },
         .connection = {},
         .points = {},
     });
-    config.processors.push_back({"processor", "stub-processor", true, "{}"});
-    config.processors.push_back({"disabled", "unknown", false, "{}"});
+    config.processors.push_back({
+        "processor", "stub-processor", true, "{}", {}});
+    config.processors.push_back({
+        "disabled", "unknown", false, "{}", {}});
     config.event_publishers.push_back(
-        {"publisher", "stub-publisher", true, "{}"});
+        {"publisher", "stub-publisher", true, "{}", {}});
     config.event_publishers.push_back(
-        {"disabled", "unknown", false, "{}"});
+        {"disabled", "unknown", false, "{}", {}});
 
     auto instances = registry.create(config);
     CHECK(instances.drivers.size() == 1);
@@ -326,7 +333,8 @@ void registry_creates_only_enabled_generic_plugins() {
     CHECK(duplicate_rejected);
 
     gateway::ApplicationConfig unknown;
-    unknown.processors.push_back({"missing", "not-registered", true, "{}"});
+    unknown.processors.push_back({
+        "missing", "not-registered", true, "{}", {}});
     bool unknown_rejected = false;
     try {
         static_cast<void>(registry.create(unknown));
@@ -412,7 +420,7 @@ void runtime_dispatches_without_a_builtin_event_handler() {
     config.raw_queue_capacity = 8;
     config.devices.push_back(gateway::DeviceConfig{
         .id = "push-device",
-        .driver = {.type = "test"},
+        .driver = {.type = "test", .library = {}},
         .connection = {},
         .points = {point("value")},
     });
@@ -451,7 +459,7 @@ void runtime_rejects_poll_groups_for_push_drivers() {
     gateway::GatewayConfig config;
     config.devices.push_back(gateway::DeviceConfig{
         .id = "push-device",
-        .driver = {.type = "test"},
+        .driver = {.type = "test", .library = {}},
         .connection = {},
         .points = {point("value")},
     });
@@ -555,6 +563,7 @@ constexpr std::string_view valid_config = R"json(
   "runtime": {"run_duration_ms": 25, "raw_queue_capacity": 4},
   "devices": [{
     "id": "machine", "driver": "unrecognized_driver",
+    "library": "./unrecognized_driver.dll",
     "driver_config": {"vendor_option": 2},
     "connection": {"endpoint": "loopback"},
     "points": [{"name": "temperature", "type": "double", "unit": "C",
@@ -579,6 +588,8 @@ void config_parser_preserves_generic_plugin_specs() {
     CHECK(config.gateway.devices.front().points.front().minimum.has_value());
     CHECK(config.gateway.groups.size() == 1);
     CHECK(config.gateway.devices.front().driver.type == "unrecognized_driver");
+    CHECK(config.gateway.devices.front().driver.library ==
+          std::filesystem::path{"./unrecognized_driver.dll"});
     CHECK(config.gateway.devices.front().driver.settings_json.find(
               "vendor_option") != std::string::npos);
     CHECK(config.processors.size() == 1);

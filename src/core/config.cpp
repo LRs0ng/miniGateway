@@ -91,6 +91,30 @@ std::string string_member(
         allow_empty);
 }
 
+std::filesystem::path utf8_path(std::string value) {
+    std::u8string encoded;
+    encoded.reserve(value.size());
+    for (const auto byte : value) {
+        encoded.push_back(static_cast<char8_t>(
+            static_cast<unsigned char>(byte)));
+    }
+    return std::filesystem::path{encoded};
+}
+
+std::filesystem::path optional_path_member(
+    const Json& object,
+    std::string_view key,
+    std::string_view path) {
+    const auto item = object.find(key);
+    if (item == object.end() || item->is_null()) {
+        return {};
+    }
+    // JSON strings are UTF-8. Preserve non-ASCII Windows paths while doing no
+    // path resolution or suffix inference.
+    return utf8_path(string_value(
+        *item, std::string{path} + "." + std::string{key}));
+}
+
 bool optional_enabled(const Json& object, std::string_view path) {
     const auto item = object.find("enabled");
     if (item == object.end()) {
@@ -296,6 +320,10 @@ void parse_devices(
         device.driver.type = string_member(value, "driver", path);
         device.driver.settings_json =
             object_member(value, "driver_config", path).dump();
+        // Keep the original scalar `driver`/`driver_config` shape and use the
+        // same `library` field as every other plugin category. The value is
+        // kept verbatim; the startup loader does not infer a suffix or prefix.
+        device.driver.library = optional_path_member(value, "library", path);
         device.connection = string_map(
             member(value, "connection", path), path + ".connection");
 
@@ -378,6 +406,7 @@ std::vector<PluginConfig> parse_plugins(
             .type = string_member(value, "type", path),
             .enabled = optional_enabled(value, path),
             .settings_json = object_member(value, "config", path).dump(),
+            .library = optional_path_member(value, "library", path),
         };
         if (!ids.insert(plugin.id).second) {
             fail(path + ".id", "duplicate plugin id '" + plugin.id + "'");

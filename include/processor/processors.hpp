@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gateway/plugin_registry.hpp"
+#include "gateway/processing.hpp"
 
 #include <cstddef>
 #include <deque>
@@ -55,9 +55,5 @@ private:
     std::vector<std::string> inputs_;
     std::vector<std::string> outputs_;
 };
-
-void register_threshold_processor_plugin(PluginRegistry& registry);
-void register_window_average_processor_plugin(PluginRegistry& registry);
-void register_inference_processor_plugin(PluginRegistry& registry);
 
 }  // namespace gateway

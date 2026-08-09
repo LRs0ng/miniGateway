@@ -1,7 +1,6 @@
 #pragma once
 
 #include "gateway/event_publisher.hpp"
-#include "gateway/plugin_registry.hpp"
 
 #include <cstdint>
 
@@ -24,7 +23,5 @@ private:
     bool started_{false};
     std::uint64_t published_{0};
 };
-
-void register_print_event_publisher_plugin(PluginRegistry& registry);
 
 }  // namespace gateway

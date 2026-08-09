@@ -15,6 +15,9 @@ struct PluginConfig {
     std::string type;
     bool enabled{true};
     std::string settings_json{"{}"};
+    // Complete shared-library filename (including its suffix). Empty is
+    // retained only for tests that register a factory directly.
+    std::filesystem::path library;
 };
 
 struct ApplicationConfig {

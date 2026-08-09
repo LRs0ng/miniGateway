@@ -1,7 +1,6 @@
 #pragma once
 
 #include "gateway/acquisition.hpp"
-#include "gateway/plugin_registry.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -65,8 +64,5 @@ private:
     std::atomic<std::uint64_t> produced_{0};
     std::atomic<std::uint64_t> queue_full_{0};
 };
-
-void register_poll_simulator_plugin(PluginRegistry& registry);
-void register_push_simulator_plugin(PluginRegistry& registry);
 
 }  // namespace gateway

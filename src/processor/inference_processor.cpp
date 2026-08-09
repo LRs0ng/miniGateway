@@ -1,6 +1,7 @@
 #include "processor/processors.hpp"
 
 #include "plugin_support/plugin_json.hpp"
+#include "gateway/plugin_api.hpp"
 #include "processor_support.hpp"
 
 #include <cmath>
@@ -8,6 +9,21 @@
 #include <utility>
 
 namespace gateway {
+
+namespace {
+
+std::unique_ptr<InferenceProcessor> make_inference_processor(
+    std::string_view settings_json) {
+    constexpr std::string_view plugin{"inference processor"};
+    const auto settings =
+        plugin_json::parse_object(settings_json, plugin);
+    return std::make_unique<InferenceProcessor>(
+        plugin_json::string_member(settings, "runner", plugin),
+        plugin_json::string_array_member(settings, "inputs", plugin, true),
+        plugin_json::string_array_member(settings, "outputs", plugin, true));
+}
+
+}  // namespace
 
 InferenceProcessor::InferenceProcessor(
     std::string runner,
@@ -51,21 +67,20 @@ void InferenceProcessor::process(Event& event, ProcessingContext& context) {
     event.model_version = "demo-rms-v1";
 }
 
-void register_inference_processor_plugin(PluginRegistry& registry) {
-    registry.register_processor(
-        "inference",
-        [](std::string_view settings_json)
-            -> std::unique_ptr<IDataProcessor> {
-            constexpr std::string_view plugin{"inference processor"};
-            const auto settings =
-                plugin_json::parse_object(settings_json, plugin);
-            return std::make_unique<InferenceProcessor>(
-                plugin_json::string_member(settings, "runner", plugin),
-                plugin_json::string_array_member(
-                    settings, "inputs", plugin, true),
-                plugin_json::string_array_member(
-                    settings, "outputs", plugin, true));
-        });
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void* create_plugin(
+    const char* settings_json) {
+    try {
+        return make_inference_processor(
+                   settings_json == nullptr ? std::string_view{"{}"}
+                                             : std::string_view{settings_json})
+            .release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void destroy_plugin(void* plugin) {
+    delete static_cast<InferenceProcessor*>(plugin);
 }
 
 }  // namespace gateway

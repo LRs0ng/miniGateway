@@ -24,13 +24,41 @@ function(gateway_enable_warnings target)
     endif()
 endfunction()
 
+
 function(gateway_shared_target target)
     set_target_properties(${target} PROPERTIES
-        WINDOWS_EXPORT_ALL_SYMBOLS ON)
+        WINDOWS_EXPORT_ALL_SYMBOLS ON
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    if(WIN32)
+        # Keep the runtime filename identical to the target name on both MSVC
+        # and MinGW. The JSON configuration contains the complete `.dll` name
+        # and the loader does not infer a `lib` prefix.
+        set_target_properties(${target} PROPERTIES PREFIX "")
+    endif()
+    if(UNIX AND NOT APPLE)
+        # Keep the executable and its startup-loaded plugins relocatable in
+        # a build/deployment directory that contains gateway_core.so.
+        set_target_properties(${target} PROPERTIES
+            BUILD_RPATH_USE_ORIGIN ON
+            INSTALL_RPATH "$ORIGIN")
+    endif()
     gateway_enable_warnings(${target})
 endfunction()
 
-add_library(gateway_core SHARED
+function(gateway_executable_target target)
+    set_target_properties(${target} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    if(UNIX AND NOT APPLE)
+        set_target_properties(${target} PROPERTIES
+            BUILD_RPATH_USE_ORIGIN ON
+            INSTALL_RPATH "$ORIGIN")
+    endif()
+    gateway_enable_warnings(${target})
+endfunction()
+
+add_library(gateway_core STATIC
     src/core/config.cpp
     src/core/model.cpp
     src/core/normalizer.cpp
@@ -39,6 +67,7 @@ add_library(gateway_core SHARED
     src/core/runtime.cpp
     src/core/scheduler.cpp
 )
+
 target_include_directories(gateway_core PUBLIC include)
 target_link_libraries(gateway_core PUBLIC Threads::Threads)
 target_link_libraries(gateway_core PRIVATE nlohmann_json::nlohmann_json)
@@ -76,7 +105,7 @@ add_gateway_plugin(gateway_inference_processor
     src/processor/inference_processor.cpp)
 target_include_directories(gateway_inference_processor PRIVATE src/processor)
 
-set(GATEWAY_LINKED_PLUGINS
+set(GATEWAY_RUNTIME_PLUGIN_TARGETS
     gateway_poll_simulator
     gateway_push_simulator
     gateway_print_event_publisher
@@ -84,13 +113,10 @@ set(GATEWAY_LINKED_PLUGINS
     gateway_window_average_processor
     gateway_inference_processor)
 
-add_executable(miniGateway
-    src/main.cpp
-    src/bootstrap/linked_plugins.cpp)
-target_link_libraries(miniGateway PRIVATE
-    gateway_core
-    ${GATEWAY_LINKED_PLUGINS})
-gateway_enable_warnings(miniGateway)
+add_executable(miniGateway src/main.cpp)
+target_link_libraries(miniGateway PRIVATE gateway_core)
+add_dependencies(miniGateway ${GATEWAY_RUNTIME_PLUGIN_TARGETS})
+gateway_executable_target(miniGateway)
 
 add_custom_command(TARGET miniGateway POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

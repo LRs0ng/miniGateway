@@ -1,12 +1,28 @@
 #include "processor/processors.hpp"
 
 #include "plugin_support/plugin_json.hpp"
+#include "gateway/plugin_api.hpp"
 #include "processor_support.hpp"
 
 #include <stdexcept>
 #include <utility>
 
 namespace gateway {
+
+namespace {
+
+std::unique_ptr<ThresholdProcessor> make_threshold_processor(
+    std::string_view settings_json) {
+    constexpr std::string_view plugin{"threshold processor"};
+    const auto settings =
+        plugin_json::parse_object(settings_json, plugin);
+    return std::make_unique<ThresholdProcessor>(
+        plugin_json::string_member(settings, "input", plugin),
+        plugin_json::number_member(settings, "greater_than", plugin),
+        plugin_json::string_member(settings, "output", plugin));
+}
+
+}  // namespace
 
 ThresholdProcessor::ThresholdProcessor(
     std::string input,
@@ -34,19 +50,20 @@ void ThresholdProcessor::process(Event& event, ProcessingContext&) {
         input->received_time_ns));
 }
 
-void register_threshold_processor_plugin(PluginRegistry& registry) {
-    registry.register_processor(
-        "threshold",
-        [](std::string_view settings_json)
-            -> std::unique_ptr<IDataProcessor> {
-            constexpr std::string_view plugin{"threshold processor"};
-            const auto settings =
-                plugin_json::parse_object(settings_json, plugin);
-            return std::make_unique<ThresholdProcessor>(
-                plugin_json::string_member(settings, "input", plugin),
-                plugin_json::number_member(settings, "greater_than", plugin),
-                plugin_json::string_member(settings, "output", plugin));
-        });
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void* create_plugin(
+    const char* settings_json) {
+    try {
+        return make_threshold_processor(
+                   settings_json == nullptr ? std::string_view{"{}"}
+                                             : std::string_view{settings_json})
+            .release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void destroy_plugin(void* plugin) {
+    delete static_cast<ThresholdProcessor*>(plugin);
 }
 
 }  // namespace gateway

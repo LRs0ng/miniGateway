@@ -1,11 +1,25 @@
 #include "print_event_publisher.hpp"
 
 #include "plugin_support/plugin_json.hpp"
+#include "gateway/plugin_api.hpp"
 
 #include <iostream>
 #include <stdexcept>
 
 namespace gateway {
+
+namespace {
+
+std::unique_ptr<PrintEventPublisher> make_print_publisher(
+    std::string_view settings_json) {
+    constexpr std::string_view plugin{"print event publisher"};
+    const auto settings =
+        plugin_json::parse_object(settings_json, plugin);
+    return std::make_unique<PrintEventPublisher>(
+        plugin_json::bool_member(settings, "include_readings", plugin));
+}
+
+}  // namespace
 
 PrintEventPublisher::PrintEventPublisher(bool include_readings)
     : include_readings_(include_readings) {}
@@ -58,18 +72,20 @@ std::uint64_t PrintEventPublisher::published() const noexcept {
     return published_;
 }
 
-void register_print_event_publisher_plugin(PluginRegistry& registry) {
-    registry.register_event_publisher(
-        "print",
-        [](std::string_view settings_json)
-            -> std::unique_ptr<IEventPublisher> {
-            constexpr std::string_view plugin{"print event publisher"};
-            const auto settings =
-                plugin_json::parse_object(settings_json, plugin);
-            return std::make_unique<PrintEventPublisher>(
-                plugin_json::bool_member(
-                    settings, "include_readings", plugin));
-        });
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void* create_plugin(
+    const char* settings_json) {
+    try {
+        return make_print_publisher(
+                   settings_json == nullptr ? std::string_view{"{}"}
+                                             : std::string_view{settings_json})
+            .release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void destroy_plugin(void* plugin) {
+    delete static_cast<PrintEventPublisher*>(plugin);
 }
 
 }  // namespace gateway

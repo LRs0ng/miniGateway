@@ -7,6 +7,7 @@
     {
       "id": "machine-01",
       "driver": "simulator_poll",
+      "library": "./gateway_poll_simulator.dll",
       "driver_config": {
         "latency_ms": 35
       },
@@ -35,6 +36,7 @@
     {
       "id": "vibration-feed",
       "driver": "simulator_push",
+      "library": "./gateway_push_simulator.dll",
       "driver_config": {
         "interval_ms": 180
       },
@@ -79,6 +81,7 @@
     {
       "id": "temperature-alarm",
       "type": "threshold",
+      "library": "./gateway_threshold_processor.dll",
       "enabled": true,
       "config": {
         "input": "temperature",
@@ -89,6 +92,7 @@
     {
       "id": "vibration-average",
       "type": "window_average",
+      "library": "./gateway_window_average_processor.dll",
       "enabled": true,
       "config": {
         "input": "vibration_x",
@@ -99,6 +103,7 @@
     {
       "id": "vibration-rms",
       "type": "inference",
+      "library": "./gateway_inference_processor.dll",
       "enabled": true,
       "config": {
         "runner": "demo_rms",
@@ -111,29 +116,10 @@
     {
       "id": "console",
       "type": "print",
+      "library": "./gateway_print_event_publisher.dll",
       "enabled": true,
       "config": {
         "include_readings": true
-      }
-    },
-    {
-      "id": "mqtt",
-      "type": "mqtt",
-      "enabled": false,
-      "config": {
-        "host": "127.0.0.1",
-        "port": 1883,
-        "keepalive": 30,
-        "client_id": "edge-gateway",
-        "topic_prefix": "edge/events",
-        "qos": 1,
-        "retain": false,
-        "clean_session": true,
-        "username": "",
-        "password": "",
-        "reconnect_delay": 1,
-        "reconnect_delay_max": 30,
-        "reconnect_exponential_backoff": true
       }
     }
   ]

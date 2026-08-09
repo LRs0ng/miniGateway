@@ -37,12 +37,14 @@ void GatewayRuntime::start() {
     std::size_t started_publishers = 0;
     try {
         for (auto& instance : event_publishers_) {
-            instance.publisher->start();
+            // Register the slot before calling user code so a partial start
+            // can be rolled back if start() throws after acquiring resources.
             ++started_publishers;
+            instance.publisher->start();
         }
         for (auto& instance : drivers_) {
-            instance.driver->start();
             ++started_drivers;
+            instance.driver->start();
         }
 
         const auto start_time = SchedulerClock::now();

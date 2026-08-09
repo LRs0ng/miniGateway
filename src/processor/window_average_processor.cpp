@@ -1,6 +1,7 @@
 #include "processor/processors.hpp"
 
 #include "plugin_support/plugin_json.hpp"
+#include "gateway/plugin_api.hpp"
 #include "processor_support.hpp"
 
 #include <numeric>
@@ -8,6 +9,21 @@
 #include <utility>
 
 namespace gateway {
+
+namespace {
+
+std::unique_ptr<WindowAverageProcessor> make_window_average_processor(
+    std::string_view settings_json) {
+    constexpr std::string_view plugin{"window average processor"};
+    const auto settings =
+        plugin_json::parse_object(settings_json, plugin);
+    return std::make_unique<WindowAverageProcessor>(
+        plugin_json::string_member(settings, "input", plugin),
+        plugin_json::size_member(settings, "window", plugin, true),
+        plugin_json::string_member(settings, "output", plugin));
+}
+
+}  // namespace
 
 WindowAverageProcessor::WindowAverageProcessor(
     std::string input,
@@ -45,19 +61,20 @@ void WindowAverageProcessor::process(Event& event, ProcessingContext&) {
         input->received_time_ns));
 }
 
-void register_window_average_processor_plugin(PluginRegistry& registry) {
-    registry.register_processor(
-        "window_average",
-        [](std::string_view settings_json)
-            -> std::unique_ptr<IDataProcessor> {
-            constexpr std::string_view plugin{"window average processor"};
-            const auto settings =
-                plugin_json::parse_object(settings_json, plugin);
-            return std::make_unique<WindowAverageProcessor>(
-                plugin_json::string_member(settings, "input", plugin),
-                plugin_json::size_member(settings, "window", plugin, true),
-                plugin_json::string_member(settings, "output", plugin));
-        });
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void* create_plugin(
+    const char* settings_json) {
+    try {
+        return make_window_average_processor(
+                   settings_json == nullptr ? std::string_view{"{}"}
+                                             : std::string_view{settings_json})
+            .release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void destroy_plugin(void* plugin) {
+    delete static_cast<WindowAverageProcessor*>(plugin);
 }
 
 }  // namespace gateway

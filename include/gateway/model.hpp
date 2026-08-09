@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -43,6 +44,9 @@ struct PointConfig {
 struct PluginSpec {
     std::string type;
     std::string settings_json{"{}"};
+    // Complete shared-library filename (including its suffix). Empty is
+    // allowed only for in-process test registration.
+    std::filesystem::path library;
 };
 
 struct DeviceConfig {

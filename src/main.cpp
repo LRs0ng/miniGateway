@@ -1,5 +1,3 @@
-#include "bootstrap/linked_plugins.hpp"
-
 #include "gateway/config.hpp"
 #include "gateway/plugin_registry.hpp"
 #include "gateway/runtime.hpp"
@@ -48,9 +46,14 @@ int main(int argc, char** argv) {
             : default_config_path();
         auto config = gateway::load_config(config_path);
 
-        gateway::PluginRegistry registry;
-        register_linked_plugins(registry);
-        auto plugins = registry.create(config);
+        gateway::PluginInstances plugins;
+        {
+            // The registry is a startup-only assembler. Loaded adapters keep
+            // their own shared-library handles after this scope ends.
+            gateway::PluginRegistry registry;
+            registry.load_dynamic_plugins(config);
+            plugins = registry.create(config);
+        }
         const auto run_for = config.run_duration;
 
         gateway::GatewayRuntime runtime{

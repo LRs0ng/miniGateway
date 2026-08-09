@@ -1,31 +1,26 @@
-#include "bootstrap/linked_plugins.hpp"
-
 #include "gateway/config.hpp"
 #include "gateway/model.hpp"
 #include "gateway/plugin_registry.hpp"
 #include "gateway/processing.hpp"
 #include "gateway/runtime.hpp"
-#include "print_event_publisher.hpp"
-#include "processor/processors.hpp"
-#include "simulator.hpp"
 
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #ifndef GATEWAY_TEST_CONFIG_PATH
-#define GATEWAY_TEST_CONFIG_PATH "example/config.json"
+#define GATEWAY_TEST_CONFIG_PATH "config.json"
 #endif
 
 namespace {
@@ -88,23 +83,65 @@ gateway::Event event(
     };
 }
 
-void processor_plugins_are_created_through_the_common_interface() {
-    gateway::PluginRegistry registry;
-    gateway::register_threshold_processor_plugin(registry);
-    gateway::register_window_average_processor_plugin(registry);
-    gateway::register_inference_processor_plugin(registry);
+std::filesystem::path test_config_path() {
+    return std::filesystem::path{GATEWAY_TEST_CONFIG_PATH};
+}
 
+std::filesystem::path test_plugin_directory() {
+    const auto parent = test_config_path().parent_path();
+    return parent.empty() ? std::filesystem::current_path() : parent;
+}
+
+std::filesystem::path plugin_library(std::string_view target_name) {
+#if defined(_WIN32)
+    const std::string filename = std::string{target_name} + ".dll";
+#elif defined(__APPLE__)
+    const std::string filename = "lib" + std::string{target_name} + ".dylib";
+#else
+    const std::string filename = "lib" + std::string{target_name} + ".so";
+#endif
+    return test_plugin_directory() / filename;
+}
+
+void load_plugins(
+    gateway::PluginRegistry& registry,
+    const gateway::ApplicationConfig& config) {
+    registry.load_dynamic_plugins(config);
+}
+
+gateway::PluginConfig processor_config(
+    std::string id,
+    std::string type,
+    std::string library,
+    std::string settings) {
+    return gateway::PluginConfig{
+        .id = std::move(id),
+        .type = std::move(type),
+        .enabled = true,
+        .settings_json = std::move(settings),
+        .library = std::filesystem::path{std::move(library)},
+    };
+}
+
+void processor_plugins_are_created_through_dynamic_libraries() {
     gateway::ApplicationConfig config;
     config.processors = {
-        {"alarm", "threshold", true,
-         R"({"input":"temperature","greater_than":85,"output":"alarm"})"},
-        {"average", "window_average", true,
-         R"({"input":"temperature","window":2,"output":"average"})"},
-        {"rms", "inference", true,
-         R"({"runner":"demo_rms","inputs":["x","y"],"outputs":["score"]})"},
+        processor_config(
+            "alarm", "threshold", plugin_library("gateway_threshold_processor").string(),
+            R"({"input":"temperature","greater_than":85,"output":"alarm"})"),
+        processor_config(
+            "average", "window_average", plugin_library("gateway_window_average_processor").string(),
+            R"({"input":"temperature","window":2,"output":"average"})"),
+        processor_config(
+            "rms", "inference", plugin_library("gateway_inference_processor").string(),
+            R"({"runner":"demo_rms","inputs":["x","y"],"outputs":["score"]})"),
     };
+
+    gateway::PluginRegistry registry;
+    load_plugins(registry, config);
     auto plugins = registry.create(config);
     CHECK(plugins.processors.size() == 3);
+
     gateway::ProcessingContext context{.now_ns = 300};
     auto first = event(
         "machine",
@@ -128,20 +165,22 @@ void processor_plugins_are_created_through_the_common_interface() {
     check_near(std::get<double>(average->value), 85.0);
 }
 
-void poll_simulator_is_a_driver_plugin() {
-    gateway::PluginRegistry registry;
-    gateway::register_poll_simulator_plugin(registry);
+void poll_simulator_is_loaded_from_a_shared_library() {
     gateway::ApplicationConfig config;
     gateway::DeviceConfig device{
         .id = "machine",
         .driver = {
             .type = "simulator_poll",
             .settings_json = R"({"latency_ms":0})",
+            .library = plugin_library("gateway_poll_simulator"),
         },
         .connection = {},
         .points = {point("temperature")},
     };
     config.gateway.devices.push_back(device);
+
+    gateway::PluginRegistry registry;
+    load_plugins(registry, config);
     auto plugins = registry.create(config);
     CHECK(plugins.drivers.size() == 1);
 
@@ -166,20 +205,22 @@ void poll_simulator_is_a_driver_plugin() {
     CHECK(batch.samples.front().status == gateway::Quality::Good);
 }
 
-void push_simulator_is_a_driver_plugin() {
-    gateway::PluginRegistry registry;
-    gateway::register_push_simulator_plugin(registry);
+void push_simulator_is_loaded_from_a_shared_library() {
     gateway::ApplicationConfig config;
     gateway::DeviceConfig device{
         .id = "feed",
         .driver = {
             .type = "simulator_push",
             .settings_json = R"({"interval_ms":2})",
+            .library = plugin_library("gateway_push_simulator"),
         },
         .connection = {},
         .points = {point("vibration_x")},
     };
     config.gateway.devices.push_back(device);
+
+    gateway::PluginRegistry registry;
+    load_plugins(registry, config);
     auto plugins = registry.create(config);
     CHECK(plugins.drivers.size() == 1);
 
@@ -226,17 +267,22 @@ private:
     std::streambuf* previous_;
 };
 
-void print_publisher_replaces_the_main_callback() {
-    gateway::PluginRegistry registry;
-    gateway::register_print_event_publisher_plugin(registry);
+void print_publisher_is_loaded_from_a_shared_library() {
     gateway::ApplicationConfig config;
-    config.event_publishers.push_back(
-        {"console", "print", true, R"({"include_readings":true})"});
+    config.event_publishers.push_back({
+        .id = "console",
+        .type = "print",
+        .enabled = true,
+        .settings_json = R"({"include_readings":true})",
+        .library = plugin_library("gateway_print_event_publisher"),
+    });
+
+    gateway::PluginRegistry registry;
+    load_plugins(registry, config);
     auto plugins = registry.create(config);
     CHECK(plugins.event_publishers.size() == 1);
     auto& publisher = *plugins.event_publishers.front().publisher;
-    gateway::GatewayConfig gateway_config;
-    publisher.configure(gateway_config);
+    publisher.configure({});
     publisher.start();
     gateway::Event value = event("machine", {reading("temperature", 42.0)});
     value.model_version = "model-v1";
@@ -252,13 +298,76 @@ void print_publisher_replaces_the_main_callback() {
     CHECK(publisher.publish(value) == gateway::EventPublishResult::Unavailable);
 }
 
+void dynamic_loader_rejects_missing_library_before_runtime_start() {
+    gateway::ApplicationConfig config;
+    config.processors.push_back({
+        .id = "missing",
+        .type = "missing",
+        .enabled = true,
+        .settings_json = "{}",
+        .library = plugin_library("does-not-exist"),
+    });
 
-void json_assembles_all_linked_plugins_end_to_end() {
-    auto config = gateway::load_config(GATEWAY_TEST_CONFIG_PATH);
+    gateway::PluginRegistry registry;
+    bool rejected = false;
+    try {
+        registry.load_dynamic_plugins(config);
+    } catch (const std::runtime_error& error) {
+        rejected = std::string{error.what()}.find("cannot load plugin") !=
+            std::string::npos;
+    }
+    CHECK(rejected);
+}
+
+void dynamic_loader_requires_a_complete_library_filename() {
+    const auto exact = plugin_library("gateway_threshold_processor");
+    gateway::ApplicationConfig config;
+    config.processors.push_back(processor_config(
+        "threshold", "threshold",
+        (exact.parent_path() / exact.stem()).string(),
+        R"({"input":"temperature","greater_than":85,"output":"alarm"})"));
+
+    gateway::PluginRegistry registry;
+    bool rejected = false;
+    try {
+        load_plugins(registry, config);
+    } catch (const std::invalid_argument& error) {
+        rejected = std::string{error.what()}.find(
+            "complete filename with a suffix") != std::string::npos;
+    }
+    CHECK(rejected);
+}
+
+void dynamic_loader_rejects_cross_category_library_reuse() {
+    gateway::ApplicationConfig config;
+    config.processors.push_back(processor_config(
+        "processor", "threshold", plugin_library("gateway_threshold_processor").string(),
+        R"({"input":"temperature","greater_than":85,"output":"alarm"})"));
+    config.event_publishers.push_back({
+        .id = "publisher",
+        .type = "print",
+        .enabled = true,
+        .settings_json = R"({"include_readings":true})",
+        .library = plugin_library("gateway_threshold_processor"),
+    });
+
+    gateway::PluginRegistry registry;
+    bool rejected = false;
+    try {
+        load_plugins(registry, config);
+    } catch (const std::invalid_argument& error) {
+        rejected = std::string{error.what()}.find(
+            "already assigned") != std::string::npos;
+    }
+    CHECK(rejected);
+}
+
+void json_assembles_plugins_end_to_end() {
+    auto config = gateway::load_config(test_config_path());
     config.run_duration = 500ms;
 
     gateway::PluginRegistry registry;
-    register_linked_plugins(registry);
+    load_plugins(registry, config);
     auto plugins = registry.create(config);
     CHECK(plugins.drivers.size() == 2);
     CHECK(plugins.processors.size() == 3);
@@ -295,11 +404,14 @@ struct TestCase {
 
 int main() {
     const std::vector<TestCase> tests{
-        {"processor plugins", processor_plugins_are_created_through_the_common_interface},
-        {"poll simulator plugin", poll_simulator_is_a_driver_plugin},
-        {"push simulator plugin", push_simulator_is_a_driver_plugin},
-        {"print publisher plugin", print_publisher_replaces_the_main_callback},
-        {"JSON plugin assembly", json_assembles_all_linked_plugins_end_to_end},
+        {"processor dynamic plugins", processor_plugins_are_created_through_dynamic_libraries},
+        {"poll simulator dynamic plugin", poll_simulator_is_loaded_from_a_shared_library},
+        {"push simulator dynamic plugin", push_simulator_is_loaded_from_a_shared_library},
+        {"print publisher dynamic plugin", print_publisher_is_loaded_from_a_shared_library},
+        {"missing library", dynamic_loader_rejects_missing_library_before_runtime_start},
+        {"library filename validation", dynamic_loader_requires_a_complete_library_filename},
+        {"cross-category library reuse", dynamic_loader_rejects_cross_category_library_reuse},
+        {"JSON dynamic assembly", json_assembles_plugins_end_to_end},
     };
 
     std::size_t failures = 0;

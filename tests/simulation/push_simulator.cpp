@@ -1,12 +1,26 @@
 #include "simulator.hpp"
 
 #include "plugin_support/plugin_json.hpp"
+#include "gateway/plugin_api.hpp"
 #include "simulation_support.hpp"
 
 #include <stdexcept>
 #include <utility>
 
 namespace gateway {
+
+namespace {
+
+std::unique_ptr<PushSimulatorDriver> make_push_simulator(
+    std::string_view settings_json) {
+    constexpr std::string_view plugin{"push simulator"};
+    const auto settings =
+        plugin_json::parse_object(settings_json, plugin);
+    return std::make_unique<PushSimulatorDriver>(
+        plugin_json::milliseconds_member(settings, "interval_ms", plugin, true));
+}
+
+}  // namespace
 
 PushSimulatorDriver::PushSimulatorDriver(std::chrono::milliseconds interval)
     : interval_(interval) {
@@ -105,18 +119,20 @@ RawBatch PushSimulatorDriver::make_batch() {
     return batch;
 }
 
-void register_push_simulator_plugin(PluginRegistry& registry) {
-    registry.register_driver(
-        "simulator_push",
-        [](std::string_view settings_json)
-            -> std::unique_ptr<IProtocolDriver> {
-            constexpr std::string_view plugin{"push simulator"};
-            const auto settings =
-                plugin_json::parse_object(settings_json, plugin);
-            return std::make_unique<PushSimulatorDriver>(
-                plugin_json::milliseconds_member(
-                    settings, "interval_ms", plugin, true));
-        });
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void* create_plugin(
+    const char* settings_json) {
+    try {
+        return make_push_simulator(
+                   settings_json == nullptr ? std::string_view{"{}"}
+                                             : std::string_view{settings_json})
+            .release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void destroy_plugin(void* plugin) {
+    delete static_cast<PushSimulatorDriver*>(plugin);
 }
 
 }  // namespace gateway
