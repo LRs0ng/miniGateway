@@ -2,6 +2,7 @@
 
 #include "gateway/acquisition.hpp"
 #include "gateway/config.hpp"
+#include "gateway/device_control_source.hpp"
 #include "gateway/event_publisher.hpp"
 #include "gateway/processing.hpp"
 
@@ -24,6 +25,8 @@ using ProcessorFactory =
     std::function<std::unique_ptr<IDataProcessor>(std::string_view)>;
 using EventPublisherFactory =
     std::function<std::unique_ptr<IEventPublisher>(std::string_view)>;
+using DeviceControlSourceFactory =
+    std::function<std::unique_ptr<IDeviceControlSource>(std::string_view)>;
 
 // Load all libraries named by the configuration. This operation is intended
 // to be called once before PluginRegistry::create(); no library is loaded by
@@ -34,6 +37,7 @@ struct PluginInstances {
     std::vector<DriverInstance> drivers;
     std::vector<std::unique_ptr<IDataProcessor>> processors;
     std::vector<EventPublisherInstance> event_publishers;
+    std::vector<std::unique_ptr<IDeviceControlSource>> sources;
 };
 
 class PluginRegistry {
@@ -43,13 +47,14 @@ public:
     void register_event_publisher(
         std::string type,
         EventPublisherFactory factory);
+    void register_device_control_source(
+        std::string type,
+        DeviceControlSourceFactory factory);
 
     // Load all libraries named by the configuration once during startup.
     // `PluginSpec::library` is passed to the platform loader unchanged. A
-    // path containing `./` or another directory separator is interpreted
-    // from the process working directory; a bare filename follows the
-    // platform loader's search rules. In both cases the filename must include
-    // its platform-specific suffix.
+    // relative path is interpreted from the process working directory. The
+    // filename must include its platform-specific suffix.
     void load_dynamic_plugins(const ApplicationConfig& config);
 
     [[nodiscard]] PluginInstances create(
@@ -60,10 +65,14 @@ private:
     std::unordered_map<std::string, ProcessorFactory> processor_factories_;
     std::unordered_map<std::string, EventPublisherFactory>
         event_publisher_factories_;
+    std::unordered_map<std::string, DeviceControlSourceFactory>
+        device_control_source_factories_;
     std::vector<std::shared_ptr<DynamicPluginLoader>> dynamic_plugins_;
+    // Maps a category/type key to the exact path supplied by configuration.
     std::unordered_map<std::string, std::filesystem::path>
         dynamic_plugin_sources_;
-    std::unordered_map<std::string, std::string> dynamic_library_owners_;
+    std::unordered_map<std::filesystem::path, std::string>
+        dynamic_library_owners_;
     bool dynamic_loading_called_{false};
 };
 

@@ -1,7 +1,8 @@
 {
   "runtime": {
     "run_duration_ms": 2200,
-    "raw_queue_capacity": 32
+    "raw_queue_capacity": 32,
+    "control_queue_capacity": 64
   },
   "devices": [
     {
@@ -120,6 +121,21 @@
       "enabled": true,
       "config": {
         "include_readings": true
+      }
+    }
+  ],
+  "device_control_sources": [
+    {
+      "id": "simulator-controls",
+      "type": "periodic_control",
+      "library": "./gateway_periodic_control_source.dll",
+      "enabled": true,
+      "config": {
+        "request_id_prefix": "simulation-control",
+        "device_ids": ["machine-01", "vibration-feed"],
+        "command": "print",
+        "interval_ms": 500,
+        "timeout_ms": 250
       }
     }
   ]

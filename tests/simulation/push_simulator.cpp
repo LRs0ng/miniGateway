@@ -4,7 +4,9 @@
 #include "gateway/plugin_api.hpp"
 #include "simulation_support.hpp"
 
+#include <iostream>
 #include <stdexcept>
+#include <syncstream>
 #include <utility>
 
 namespace gateway {
@@ -66,6 +68,32 @@ void PushSimulatorDriver::stop() noexcept {
     worker_.request_stop();
     wakeup_.notify_all();
     worker_.join();
+}
+
+DeviceControlResult PushSimulatorDriver::control(
+    const DeviceControlRequest& request) {
+    if (!worker_.joinable()) {
+        throw std::logic_error("push simulator is stopped");
+    }
+    if (request.device_id != device_.id) {
+        return DeviceControlResult{
+            .request_id = request.request_id,
+            .status = DeviceControlStatus::InvalidArgument,
+            .outputs = {},
+            .message = "control request belongs to another device",
+        };
+    }
+
+    std::osyncstream{std::cout}
+        << "[push_simulator] control request_id=" << request.request_id
+        << " device=" << request.device_id
+        << " command=" << request.command << '\n';
+    return DeviceControlResult{
+        .request_id = request.request_id,
+        .status = DeviceControlStatus::Succeeded,
+        .outputs = {},
+        .message = "control command printed",
+    };
 }
 
 PushSimulatorStats PushSimulatorDriver::stats() const {

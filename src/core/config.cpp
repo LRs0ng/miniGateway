@@ -388,7 +388,11 @@ void parse_groups(
 
 std::vector<PluginConfig> parse_plugins(
     const Json& root,
-    std::string_view key) {
+    std::string_view key,
+    bool optional) {
+    if (optional && root.find(key) == root.end()) {
+        return {};
+    }
     const auto& values = array_member(root, key, "root");
     const auto base_path = "root." + std::string{key};
     std::unordered_set<std::string> ids;
@@ -427,12 +431,22 @@ ApplicationConfig parse_application_config(const Json& root) {
         runtime, "run_duration_ms", "root.runtime", true);
     config.gateway.raw_queue_capacity = size_member(
         runtime, "raw_queue_capacity", "root.runtime", true);
+    const auto control_capacity = runtime.find("control_queue_capacity");
+    if (control_capacity != runtime.end()) {
+        config.gateway.control_queue_capacity = size_member(
+            runtime, "control_queue_capacity", "root.runtime", true);
+    }
 
     std::unordered_map<std::string, std::unordered_set<std::string>> points;
     parse_devices(root, config, points);
     parse_groups(root, config, points);
-    config.processors = parse_plugins(root, "processors");
-    config.event_publishers = parse_plugins(root, "event_publishers");
+    config.processors = parse_plugins(root, "processors", false);
+    config.event_publishers = parse_plugins(root, "event_publishers", false);
+    // Sources are an additive configuration category.  An omitted list keeps
+    // existing configurations valid while an explicitly provided value still
+    // receives the same strict object/id/type validation as other plugins.
+    config.device_control_sources = parse_plugins(
+        root, "device_control_sources", true);
     return config;
 }
 

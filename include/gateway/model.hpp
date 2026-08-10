@@ -66,6 +66,7 @@ struct CollectionGroup {
 
 struct GatewayConfig {
     std::size_t raw_queue_capacity{64};
+    std::size_t control_queue_capacity{64};
     std::vector<DeviceConfig> devices;
     std::vector<CollectionGroup> groups;
 };

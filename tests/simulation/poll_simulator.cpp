@@ -4,7 +4,9 @@
 #include "gateway/plugin_api.hpp"
 #include "simulation_support.hpp"
 
+#include <iostream>
 #include <stdexcept>
+#include <syncstream>
 #include <utility>
 
 namespace gateway {
@@ -106,6 +108,32 @@ RawBatch PollSimulatorDriver::poll(
         });
     }
     return batch;
+}
+
+DeviceControlResult PollSimulatorDriver::control(
+    const DeviceControlRequest& request) {
+    if (!started_) {
+        throw std::logic_error("poll simulator is stopped");
+    }
+    if (request.device_id != device_.id) {
+        return DeviceControlResult{
+            .request_id = request.request_id,
+            .status = DeviceControlStatus::InvalidArgument,
+            .outputs = {},
+            .message = "control request belongs to another device",
+        };
+    }
+
+    std::osyncstream{std::cout}
+        << "[poll_simulator] control request_id=" << request.request_id
+        << " device=" << request.device_id
+        << " command=" << request.command << '\n';
+    return DeviceControlResult{
+        .request_id = request.request_id,
+        .status = DeviceControlStatus::Succeeded,
+        .outputs = {},
+        .message = "control command printed",
+    };
 }
 
 GATEWAY_PLUGIN_C GATEWAY_PLUGIN_EXPORT void* create_plugin(

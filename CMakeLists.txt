@@ -62,6 +62,7 @@ add_library(gateway_core STATIC
     src/core/config.cpp
     src/core/model.cpp
     src/core/normalizer.cpp
+    src/core/control.cpp
     src/core/plugin_registry.cpp
     src/core/processing.cpp
     src/core/runtime.cpp
@@ -93,6 +94,9 @@ add_gateway_plugin(gateway_print_event_publisher
     tests/simulation/print_event_publisher.cpp)
 target_include_directories(gateway_print_event_publisher PUBLIC tests/simulation)
 
+add_gateway_plugin(gateway_periodic_control_source
+    tests/simulation/periodic_control_source.cpp)
+
 add_gateway_plugin(gateway_threshold_processor
     src/processor/threshold_processor.cpp)
 target_include_directories(gateway_threshold_processor PRIVATE src/processor)
@@ -109,6 +113,7 @@ set(GATEWAY_RUNTIME_PLUGIN_TARGETS
     gateway_poll_simulator
     gateway_push_simulator
     gateway_print_event_publisher
+    gateway_periodic_control_source
     gateway_threshold_processor
     gateway_window_average_processor
     gateway_inference_processor)

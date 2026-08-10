@@ -60,7 +60,8 @@ int main(int argc, char** argv) {
             std::move(config.gateway),
             std::move(plugins.drivers),
             std::move(plugins.processors),
-            std::move(plugins.event_publishers)};
+            std::move(plugins.event_publishers),
+            std::move(plugins.sources)};
         runtime.start();
         std::this_thread::sleep_for(run_for);
         runtime.stop();
@@ -75,7 +76,11 @@ int main(int argc, char** argv) {
                   << " processor_errors=" << stats.processing.processor_errors
                   << " publish_accepted=" << stats.event_publishers.accepted
                   << " publish_unavailable=" << stats.event_publishers.unavailable
-                  << " publish_errors=" << stats.event_publishers.errors << '\n';
+                  << " publish_errors=" << stats.event_publishers.errors
+                  << " control_accepted=" << stats.control.accepted
+                  << " control_succeeded=" << stats.control.succeeded
+                  << " control_failed=" << stats.control.failed
+                  << " control_cancelled=" << stats.control.cancelled << '\n';
     } catch (const std::exception& error) {
         std::cerr << "gateway failed: " << error.what() << '\n';
         return EXIT_FAILURE;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gateway/bounded_queue.hpp"
+#include "gateway/control.hpp"
 #include "gateway/model.hpp"
 #include "gateway/scheduler.hpp"
 
@@ -34,6 +35,19 @@ public:
 
     virtual RawBatch poll(const CollectionGroup&, TimePoint) {
         throw std::logic_error("driver does not support polling");
+    }
+
+    // Drivers that do not expose a control operation can keep the default
+    // implementation. Command schemas and protocol encoding remain private
+    // to each driver.
+    virtual DeviceControlResult control(
+        const DeviceControlRequest& request) {
+        return DeviceControlResult{
+            .request_id = request.request_id,
+            .status = DeviceControlStatus::Unsupported,
+            .outputs = {},
+            .message = "driver does not support device control",
+        };
     }
 };
 

@@ -25,6 +25,10 @@ struct ApplicationConfig {
     GatewayConfig gateway;
     std::vector<PluginConfig> processors;
     std::vector<PluginConfig> event_publishers;
+    // External control ingress plugins (MQTT, HTTP, IPC, ...).  The core
+    // keeps their private `config` JSON opaque and supplies only a ControlSink
+    // when the runtime is assembled.
+    std::vector<PluginConfig> device_control_sources;
 };
 
 [[nodiscard]] ApplicationConfig parse_config(

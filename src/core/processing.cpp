@@ -6,8 +6,10 @@
 namespace gateway {
 
 ProcessingPipeline::ProcessingPipeline(
-    std::vector<std::unique_ptr<IDataProcessor>> processors)
-    : processors_(std::move(processors)) {
+    std::vector<std::unique_ptr<IDataProcessor>> processors,
+    ControlSink control)
+    : processors_(std::move(processors)),
+      control_(std::move(control)) {
     for (const auto& processor : processors_) {
         if (!processor) {
             throw std::invalid_argument("processing pipeline contains a null processor");
@@ -15,8 +17,15 @@ ProcessingPipeline::ProcessingPipeline(
     }
 }
 
+void ProcessingPipeline::set_control_sink(ControlSink control) {
+    control_ = std::move(control);
+}
+
 void ProcessingPipeline::process(Event& event) {
-    ProcessingContext context{.now_ns = unix_time_ns()};
+    ProcessingContext context{
+        .now_ns = unix_time_ns(),
+        .control = control_,
+    };
     for (auto& processor : processors_) {
         try {
             processor->process(event, context);

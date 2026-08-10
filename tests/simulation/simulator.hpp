@@ -23,6 +23,8 @@ public:
     [[nodiscard]] RawBatch poll(
         const CollectionGroup& group,
         TimePoint deadline) override;
+    [[nodiscard]] DeviceControlResult control(
+        const DeviceControlRequest& request) override;
 
 private:
     DeviceConfig device_;
@@ -46,6 +48,8 @@ public:
     void configure(const DeviceConfig& device, SampleSink sink) override;
     void start() override;
     void stop() noexcept override;
+    [[nodiscard]] DeviceControlResult control(
+        const DeviceControlRequest& request) override;
 
     [[nodiscard]] PushSimulatorStats stats() const;
 

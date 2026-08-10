@@ -19,6 +19,7 @@ enum class PluginKind {
     Driver,
     Processor,
     EventPublisher,
+    DeviceControlSource,
 };
 
 template <typename Factory>
@@ -185,6 +186,11 @@ public:
         return implementation_->poll(group, deadline);
     }
 
+    [[nodiscard]] DeviceControlResult control(
+        const DeviceControlRequest& request) override {
+        return implementation_->control(request);
+    }
+
 private:
     // Declare the handle before the raw pointer. The explicit destructor runs
     // while both members are alive, and the handle is released last.
@@ -268,6 +274,56 @@ private:
     DestroyPluginFn destroy_{nullptr};
 };
 
+class LoadedControlSource final : public IDeviceControlSource {
+public:
+    LoadedControlSource(
+        std::shared_ptr<DynamicPluginLoader> library,
+        IDeviceControlSource* implementation,
+        DestroyPluginFn destroy)
+        : library_(std::move(library)),
+          implementation_(implementation),
+          destroy_(destroy) {}
+
+    ~LoadedControlSource() override {
+        if (implementation_ != nullptr) {
+            try {
+                destroy_(implementation_);
+            } catch (...) {
+            }
+            implementation_ = nullptr;
+        }
+    }
+
+    void configure(ControlSink submit) override {
+        implementation_->configure(std::move(submit));
+    }
+
+    void start() override {
+        implementation_->start();
+    }
+
+    void request_stop() noexcept override {
+        try {
+            implementation_->request_stop();
+        } catch (...) {
+        }
+    }
+
+    void stop() noexcept override {
+        try {
+            implementation_->stop();
+        } catch (...) {
+        }
+    }
+
+private:
+    // Keep the module loaded until the source object and all of its joined
+    // callback activity have been destroyed.
+    std::shared_ptr<DynamicPluginLoader> library_;
+    IDeviceControlSource* implementation_{nullptr};
+    DestroyPluginFn destroy_{nullptr};
+};
+
 template <typename FactoryMap>
 bool has_factory(const FactoryMap& factories, const std::string& type) {
     return factories.find(type) != factories.end();
@@ -284,6 +340,9 @@ std::string source_key(PluginKind kind, std::string_view type) {
             break;
         case PluginKind::EventPublisher:
             category = "event_publisher";
+            break;
+        case PluginKind::DeviceControlSource:
+            category = "device_control_source";
             break;
     }
     return category + ":" + std::string{type};
@@ -368,6 +427,16 @@ void PluginRegistry::register_event_publisher(
         "event publisher");
 }
 
+void PluginRegistry::register_device_control_source(
+    std::string type,
+    DeviceControlSourceFactory factory) {
+    register_factory(
+        device_control_source_factories_,
+        std::move(type),
+        std::move(factory),
+        "device control source");
+}
+
 void PluginRegistry::load_dynamic_plugins(
     const ApplicationConfig& config) {
     if (dynamic_loading_called_) {
@@ -397,19 +466,18 @@ void PluginRegistry::load_dynamic_plugins(
     };
 
     // The minimal C ABI has no category/type descriptor. Keep one shared
-    // library tied to one registry key so a Driver DLL cannot accidentally be
-    // reinterpreted as a Processor or Publisher.
+    // library tied to one registry key so an implementation cannot
+    // accidentally be reinterpreted as a different plugin interface.
     auto claim_library = [&](const std::filesystem::path& configured,
                              const std::string& key) {
-        const auto path_key = configured.generic_string();
-        const auto owner = dynamic_library_owners_.find(path_key);
+        const auto owner = dynamic_library_owners_.find(configured);
         if (owner != dynamic_library_owners_.end() && owner->second != key) {
             throw std::invalid_argument(
                 "plugin library " + path_text(configured) +
                 " is already assigned to " + owner->second +
                 " and cannot be assigned to " + key);
         }
-        dynamic_library_owners_.emplace(path_key, key);
+        dynamic_library_owners_.emplace(configured, key);
     };
 
     auto load_driver = [&](const PluginSpec& spec) {
@@ -526,6 +594,47 @@ void PluginRegistry::load_dynamic_plugins(
         dynamic_plugin_sources_.emplace(key, spec.library);
     };
 
+    auto load_control_source = [&](const PluginConfig& spec) {
+        if (!spec.enabled) {
+            return;
+        }
+        const auto key = source_key(PluginKind::DeviceControlSource, spec.type);
+        if (spec.library.empty()) {
+            if (!has_factory(
+                    device_control_source_factories_, spec.type)) {
+                throw std::invalid_argument(
+                    "device control source plugin '" + spec.type +
+                    "' has no library path and is not registered");
+            }
+            return;
+        }
+        const auto previous = dynamic_plugin_sources_.find(key);
+        if (previous != dynamic_plugin_sources_.end()) {
+            if (previous->second != spec.library) {
+                throw std::invalid_argument(
+                    "device control source type is configured with multiple "
+                    "libraries: " + spec.type);
+            }
+            return;
+        }
+        if (has_factory(device_control_source_factories_, spec.type)) {
+            throw std::invalid_argument(
+                "duplicate device control source plugin type: " + spec.type);
+        }
+        claim_library(spec.library, key);
+        const auto library = find_or_open(spec.library, spec.type);
+        const auto create = function_symbol<CreatePluginFn>(
+            library, "create_plugin", spec.type);
+        const auto destroy = function_symbol<DestroyPluginFn>(
+            library, "destroy_plugin", spec.type);
+        register_device_control_source(
+            spec.type,
+            dynamic_factory<
+                IDeviceControlSource,
+                LoadedControlSource>(library, create, destroy, spec.type));
+        dynamic_plugin_sources_.emplace(key, spec.library);
+    };
+
     for (const auto& device : config.gateway.devices) {
         load_driver(device.driver);
     }
@@ -534,6 +643,9 @@ void PluginRegistry::load_dynamic_plugins(
     }
     for (const auto& publisher : config.event_publishers) {
         load_publisher(publisher);
+    }
+    for (const auto& source : config.device_control_sources) {
+        load_control_source(source);
     }
 }
 
@@ -586,6 +698,24 @@ PluginInstances PluginRegistry::create(const ApplicationConfig& config) const {
             .id = spec.id,
             .publisher = std::move(publisher),
         });
+    }
+
+    instances.sources.reserve(config.device_control_sources.size());
+    for (const auto& spec : config.device_control_sources) {
+        if (!spec.enabled) {
+            continue;
+        }
+        const auto& factory = find_factory(
+            device_control_source_factories_,
+            spec.type,
+            "device control source");
+        auto source = factory(spec.settings_json);
+        if (!source) {
+            throw std::runtime_error(
+                "device control source plugin factory returned null: " +
+                spec.type);
+        }
+        instances.sources.push_back(std::move(source));
     }
     return instances;
 }
