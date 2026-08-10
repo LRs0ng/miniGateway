@@ -159,3 +159,6 @@ This project uses the following third-party dependencies:
 - nlohmann/json
 - - License: MIT
 - - Repository: https://github.com/nlohmann/json.git
+- eclipse-mosquitto/mosquitto
+- - License: EPL-2.0
+- - Repository: https://github.com/eclipse-mosquitto/mosquitto.git
