@@ -16,7 +16,7 @@ add_subdirectory(
     EXCLUDE_FROM_ALL)
 
 option(GATEWAY_ENABLE_MQTT
-    "Build the Paho MQTTAsync event publisher plugin" ON)
+    "Build the Paho MQTTAsync event publisher plugin" OFF)
 
 if(WIN32)
     set(GATEWAY_DEFAULT_CONFIG
