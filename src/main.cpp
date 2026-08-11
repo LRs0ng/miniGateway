@@ -4,7 +4,6 @@
 
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -13,23 +12,7 @@
 namespace {
 
 std::filesystem::path default_config_path() {
-    const std::filesystem::path current_directory_config{"config.json"};
-    {
-        std::ifstream input{current_directory_config, std::ios::binary};
-        if (input.is_open()) {
-            return current_directory_config;
-        }
-    }
-
-    // Avoid depending on argv[0] encoding for non-ASCII Windows paths.
-    const std::filesystem::path source_tree_config{"example/config.json"};
-    {
-        std::ifstream input{source_tree_config, std::ios::binary};
-        if (input.is_open()) {
-            return source_tree_config;
-        }
-    }
-    return current_directory_config;
+    return std::filesystem::path{"config.json"};
 }
 
 }  // namespace

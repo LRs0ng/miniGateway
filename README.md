@@ -3,7 +3,7 @@
 
 目前已经实现：
 
-- Poll 与 Push 两类采集源（模拟）；
+- 支持 Poll（轮询） 与 Push（推送） 两类采集源；
 - 固定间隔、全局顺序执行的 Poll 调度；
 - 统一 `RawBatch -> Event/Reading` 数据模型；
 - 通过 `IDataProcessor` 串联规则和推理处理；
@@ -15,6 +15,104 @@
 - IDataProcessor：处理或追加 Event 中的 Reading；
 - IEventPublisher：把最终 Event 交给外部系统；
 - IDeviceControlSource：给device发送控制指令；
+
+## Quick Start
+### 1. 默认启动内容
+第一次运行建议直接使用平台缺省配置：
+- Windows 自动选择 `example/configs/defconfig_windows.json`；
+- Linux 自动选择 `example/configs/defconfig_linux.json`；
+- Poll Simulator 模拟周期采集温度和压力；
+- Push Simulator 模拟主动推送振动数据；
+- Threshold、Window Average 和 Inference 三个 Processor 处理采集结果；
+- Print Event Publisher 把 Event/Reading 输出到终端；
+- Periodic Control Source 轮流向两个 Simulator 发送控制指令；
+- 程序运行约 `2200 ms` 后自动停止并打印汇总统计。
+
+### 2. 准备构建环境
+
+最低要求如下：
+
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 或 Linux；当前不支持 macOS |
+| CMake | `3.20` 或更高版本 |
+| C++ 编译器 | 支持 C++20 的 MSVC、GCC 或 Clang |
+| C 编译器 | 仅在显式启用 `GATEWAY_ENABLE_MQTT=ON` 构建 Paho MQTT C 时需要支持 C99；默认 OFF 构建不需要 |
+| 构建工具 | MinGW Make、Unix Make 等与生成器匹配的工具 |
+| 外部服务 | 默认配置不需要；只有实际启用 MQTT Publisher 时才需要 MQTT 服务器 |
+
+### 3. Windows + MinGW
+进入项目文件夹后：
+```powershell
+mkdir build
+cd build
+cmake .. -G "MinGW Makefiles"
+mingw32-make
+```
+
+### 4. linux
+安装必要环境：
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake
+```
+构建，进入项目文件夹后：
+```bash
+mkdir build
+cd build
+cmake ..
+make
+```
+### 5、运行
+#### windows
+```powershell
+.\miniGateway.exe
+```
+### linux
+```bash
+./miniGateway
+```
+### 6. 使用 MQTT
+#### windows
+```powershell
+cmake .. -G "MinGW Makefiles" -DGATEWAY_ENABLE_MQTT=ON -DGATEWAY_CONFIG="configs/defconfig_mqtt_windows.json"
+```
+#### linux
+```bash
+cmake .. -DGATEWAY_ENABLE_MQTT=ON -DGATEWAY_CONFIG="configs/defconfig_mqtt_linux.json"
+```
+构建完成后，打开 `build\config.json` 文件
+```json
+    {
+      "id": "mqtt",
+      "type": "mqtt",
+      "library": "./gateway_mqtt_event_publisher.dll",
+      "enabled": false,
+      "config": {
+        "host": "127.0.0.1",
+        "port": 1883,
+        "keepalive": 30,
+        "client_id": "edge-gateway",
+        "topic_prefix": "edge/events",
+        "qos": 1,
+        "retain": false,
+        "clean_session": true,
+        "username": "",
+        "password": "",
+        "reconnect_delay": 1,
+        "reconnect_delay_max": 30,
+        "reconnect_exponential_backoff": true
+      }
+    }
+```
+更改默认配置，`"enabled": false` 置为 `"enabled": true`，修改默认`"host": "127.0.0.1"`和端口`"port": 1883`与MQTT服务器匹配，配置`"username": ""`和`"password": ""`
+#### 接收MQTT消息
+
+该程序发布的主题名称格式为：
+```text
+<topic_prefix>/<device_id>/event
+```
+见json配置文件中的`"topic_prefix": "edge/events"`字段，如果我要使用mqtt接收虚拟采集设备 `simulator_poll` 的信息，从json可知`simulator_poll` 的 `"id": "machine-01"`，因此客户端需要订阅的mqtt主题为 `edge/events/machine-01/event`。
 
 ## 1. 系统总体框图
 
@@ -141,15 +239,15 @@ IDeviceControlSource                 IDataProcessor::process
 5. 新建独立 `SHARED` CMake 目标并链接 `gateway_core`；
 6. 在 JSON 的 Device 中填写 `driver`、带后缀的 `library` 完整路径和 插件私有`config`（如果插件自身有配置需求的话）。
 
-Processor 和 Publisher 的步骤相同，分别实现 `IDataProcessor` 与 `IEventPublisher`。
+Processor 、 Publisher 和 ControlSource 的步骤相同，分别实现 `IDataProcessor` 、 `IEventPublisher` 和 `IDeviceControlSource`。
 
 ## 6. 参考插件样例
 | 插件类别 | 核心接口 | 示例共享库 | JSON 配置位置 |
 | --- | --- | --- | --- |
-| Driver | `IProtocolDriver` | `gateway_poll_simulator`（`simulator_poll`）、`gateway_push_simulator`（`simulator_push`） | `devices[]` 的 `driver/library/driver_config` |
-| Processor | `IDataProcessor` | `gateway_threshold_processor`（`threshold`）、`gateway_window_average_processor`（`window_average`）、`gateway_inference_processor`（`inference`） | `processors[]` |
-| Event Publisher | `IEventPublisher` | `gateway_print_event_publisher`（`print`） | `event_publishers[]` |
-| Device Control Source | `IDeviceControlSource` | `periodic_control_source` | `device_control_sources[]` |
+| Driver | `IProtocolDriver` | [`gateway_poll_simulator`（`simulator_poll`）](tests\simulation\poll_simulator.cpp)、[`gateway_push_simulator`（`simulator_push`）](tests\simulation\push_simulator.cpp) | `devices[]` 的 `driver/library/driver_config` |
+| Processor | `IDataProcessor` | [`gateway_threshold_processor`（`threshold`）](src\processor\threshold_processor.cpp)、[`gateway_window_average_processor`（`window_average`）](src\processor\window_average_processor.cpp)、[`gateway_inference_processor`（`inference`）](src\processor\inference_processor.cpp) | `processors[]` |
+| Event Publisher | `IEventPublisher` | [`gateway_print_event_publisher`（`print`）](tests\simulation\print_event_publisher.cpp) | `event_publishers[]` |
+| Device Control Source | `IDeviceControlSource` | [`periodic_control_source`](tests\simulation\periodic_control_source.cpp) | `device_control_sources[]` |
 
 这四类库都只导出相同的 `create_plugin` 和 `destroy_plugin` 两个 C 符号，插件类别由其所在 JSON 配置区决定，实例进入核心后仍通过对应的 C++ 虚接口工作。
 
@@ -159,6 +257,6 @@ This project uses the following third-party dependencies:
 - nlohmann/json
 - - License: MIT
 - - Repository: https://github.com/nlohmann/json.git
-- eclipse-mosquitto/mosquitto
+- eclipse-paho/paho.mqtt.c
 - - License: EPL-2.0
-- - Repository: https://github.com/eclipse-mosquitto/mosquitto.git
+- - Repository: https://github.com/eclipse-paho/paho.mqtt.c.git

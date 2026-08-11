@@ -142,7 +142,7 @@ void processor_plugins_are_created_through_dynamic_libraries() {
     auto plugins = registry.create(config);
     CHECK(plugins.processors.size() == 3);
 
-    gateway::ProcessingContext context{.now_ns = 300};
+    gateway::ProcessingContext context{.now_ns = 300, .control = {}};
     auto first = event(
         "machine",
         {reading("temperature", 90.0), reading("x", 3.0), reading("y", 4.0)});
@@ -197,12 +197,21 @@ void poll_simulator_is_loaded_from_a_shared_library() {
     driver.start();
     const auto batch = driver.poll(
         group, gateway::SchedulerClock::now() + 20ms);
+    const auto control = driver.control(gateway::DeviceControlRequest{
+        .request_id = "poll-control-1",
+        .device_id = "machine",
+        .command = "print",
+        .arguments = {},
+        .deadline = gateway::ControlClock::now() + 20ms,
+    });
     driver.stop();
 
     CHECK(batch.device_id == "machine");
     CHECK(batch.source == "simulator_poll");
     CHECK(batch.samples.size() == 1);
     CHECK(batch.samples.front().status == gateway::Quality::Good);
+    CHECK(control.request_id == "poll-control-1");
+    CHECK(control.status == gateway::DeviceControlStatus::Succeeded);
 }
 
 void push_simulator_is_loaded_from_a_shared_library() {
@@ -245,10 +254,19 @@ void push_simulator_is_loaded_from_a_shared_library() {
         std::unique_lock lock(mutex);
         CHECK(cv.wait_for(lock, 200ms, [&] { return received >= 2; }));
     }
+    const auto control = driver.control(gateway::DeviceControlRequest{
+        .request_id = "push-control-1",
+        .device_id = "feed",
+        .command = "print",
+        .arguments = {},
+        .deadline = gateway::ControlClock::now() + 20ms,
+    });
     driver.stop();
     const auto stopped_count = received;
     std::this_thread::sleep_for(8ms);
     CHECK(received == stopped_count);
+    CHECK(control.request_id == "push-control-1");
+    CHECK(control.status == gateway::DeviceControlStatus::Succeeded);
 }
 
 class CoutCapture {
@@ -298,6 +316,103 @@ void print_publisher_is_loaded_from_a_shared_library() {
     CHECK(publisher.publish(value) == gateway::EventPublishResult::Unavailable);
 }
 
+#if defined(GATEWAY_HAS_MQTT_PLUGIN)
+void mqtt_publisher_handles_an_unavailable_broker() {
+    gateway::ApplicationConfig config;
+    config.event_publishers.push_back({
+        .id = "mqtt",
+        .type = "mqtt",
+        .enabled = true,
+        .settings_json =
+            R"({"host":"127.0.0.1","port":1,"keepalive":5,"client_id":"gateway-test","topic_prefix":"edge/events","qos":1,"retain":false,"clean_session":true,"username":"","password":"","reconnect_delay":1,"reconnect_delay_max":2,"reconnect_exponential_backoff":true})",
+        .library = plugin_library("gateway_mqtt_event_publisher"),
+    });
+
+    gateway::PluginRegistry registry;
+    load_plugins(registry, config);
+    auto plugins = registry.create(config);
+    CHECK(plugins.event_publishers.size() == 1);
+
+    auto& publisher = *plugins.event_publishers.front().publisher;
+    publisher.configure({});
+    const auto value = event("machine", {reading("temperature", 42.0)});
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        publisher.start();
+        const auto result = publisher.publish(value);
+        CHECK(result != gateway::EventPublishResult::Rejected);
+        publisher.stop();
+        CHECK(
+            publisher.publish(value) ==
+            gateway::EventPublishResult::Unavailable);
+    }
+}
+#endif
+
+void control_source_is_loaded_from_a_shared_library() {
+    gateway::ApplicationConfig config;
+    config.device_control_sources.push_back({
+        .id = "periodic",
+        .type = "periodic_control",
+        .enabled = true,
+        .settings_json = R"({"request_id_prefix":"request","device_ids":["poll-device","push-device"],"command":"print","interval_ms":5,"timeout_ms":1000})",
+        .library = plugin_library("gateway_periodic_control_source"),
+    });
+
+    gateway::PluginRegistry registry;
+    load_plugins(registry, config);
+    auto plugins = registry.create(config);
+    CHECK(plugins.sources.size() == 1);
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<gateway::DeviceControlRequest> captured;
+    bool first_deadline_was_future = false;
+    auto& source = *plugins.sources.front();
+    source.configure(
+        [&mutex, &cv, &captured, &first_deadline_was_future](
+            gateway::DeviceControlRequest&& request,
+            gateway::ControlCompletion completion) {
+            const auto request_id = request.request_id;
+            {
+                std::lock_guard lock(mutex);
+                if (captured.empty()) {
+                    first_deadline_was_future =
+                        request.deadline > gateway::ControlClock::now();
+                }
+                captured.push_back(std::move(request));
+            }
+            completion(gateway::DeviceControlResult{
+                .request_id = request_id,
+                .status = gateway::DeviceControlStatus::Succeeded,
+                .outputs = {},
+                .message = {},
+            });
+            cv.notify_all();
+            return gateway::ControlSubmitResult::Accepted;
+        });
+    source.start();
+    {
+        std::unique_lock lock(mutex);
+        CHECK(cv.wait_for(lock, 250ms, [&captured] {
+            return captured.size() >= 4;
+        }));
+    }
+    source.request_stop();
+    source.stop();
+
+    CHECK(captured.size() >= 4);
+    CHECK(captured[0].request_id == "request-1");
+    CHECK(captured[1].request_id == "request-2");
+    CHECK(captured[2].request_id == "request-3");
+    CHECK(captured[3].request_id == "request-4");
+    CHECK(captured[0].device_id == "poll-device");
+    CHECK(captured[1].device_id == "push-device");
+    CHECK(captured[2].device_id == "poll-device");
+    CHECK(captured[3].device_id == "push-device");
+    CHECK(captured[0].command == "print");
+    CHECK(first_deadline_was_future);
+}
+
 void dynamic_loader_rejects_missing_library_before_runtime_start() {
     gateway::ApplicationConfig config;
     config.processors.push_back({
@@ -338,17 +453,36 @@ void dynamic_loader_requires_a_complete_library_filename() {
     CHECK(rejected);
 }
 
+void dynamic_loader_reuses_same_type_with_same_library() {
+    const auto library = plugin_library("gateway_threshold_processor");
+    gateway::ApplicationConfig config;
+    config.processors = {
+        processor_config(
+            "first", "threshold", library.string(),
+            R"({"input":"temperature","greater_than":85,"output":"alarm-a"})"),
+        processor_config(
+            "second", "threshold", library.string(),
+            R"({"input":"temperature","greater_than":90,"output":"alarm-b"})"),
+    };
+
+    gateway::PluginRegistry registry;
+    load_plugins(registry, config);
+    const auto plugins = registry.create(config);
+    CHECK(plugins.processors.size() == 2);
+}
+
 void dynamic_loader_rejects_cross_category_library_reuse() {
+    const auto library = plugin_library("gateway_threshold_processor");
     gateway::ApplicationConfig config;
     config.processors.push_back(processor_config(
-        "processor", "threshold", plugin_library("gateway_threshold_processor").string(),
+        "processor", "threshold", library.string(),
         R"({"input":"temperature","greater_than":85,"output":"alarm"})"));
     config.event_publishers.push_back({
         .id = "publisher",
         .type = "print",
         .enabled = true,
         .settings_json = R"({"include_readings":true})",
-        .library = plugin_library("gateway_threshold_processor"),
+        .library = library,
     });
 
     gateway::PluginRegistry registry;
@@ -364,7 +498,9 @@ void dynamic_loader_rejects_cross_category_library_reuse() {
 
 void json_assembles_plugins_end_to_end() {
     auto config = gateway::load_config(test_config_path());
-    config.run_duration = 500ms;
+    // Cover the 300 ms poll interval with margin, while staying below the
+    // 500 ms control interval so only the initial request is deterministic.
+    config.run_duration = 450ms;
 
     gateway::PluginRegistry registry;
     load_plugins(registry, config);
@@ -372,12 +508,14 @@ void json_assembles_plugins_end_to_end() {
     CHECK(plugins.drivers.size() == 2);
     CHECK(plugins.processors.size() == 3);
     CHECK(plugins.event_publishers.size() == 1);
+    CHECK(plugins.sources.size() == 1);
 
     gateway::GatewayRuntime runtime{
         std::move(config.gateway),
         std::move(plugins.drivers),
         std::move(plugins.processors),
-        std::move(plugins.event_publishers)};
+        std::move(plugins.event_publishers),
+        std::move(plugins.sources)};
     {
         CoutCapture capture;
         runtime.start();
@@ -393,6 +531,9 @@ void json_assembles_plugins_end_to_end() {
     CHECK(stats.event_publishers.attempts == stats.delivered_events);
     CHECK(stats.event_publishers.accepted == stats.delivered_events);
     CHECK(stats.event_publishers.errors == 0);
+    CHECK(stats.control.accepted > 0);
+    CHECK(stats.control.executed == stats.control.accepted);
+    CHECK(stats.control.succeeded == stats.control.accepted);
 }
 
 struct TestCase {
@@ -408,8 +549,13 @@ int main() {
         {"poll simulator dynamic plugin", poll_simulator_is_loaded_from_a_shared_library},
         {"push simulator dynamic plugin", push_simulator_is_loaded_from_a_shared_library},
         {"print publisher dynamic plugin", print_publisher_is_loaded_from_a_shared_library},
+#if defined(GATEWAY_HAS_MQTT_PLUGIN)
+        {"MQTT publisher unavailable broker", mqtt_publisher_handles_an_unavailable_broker},
+#endif
+        {"control source dynamic plugin", control_source_is_loaded_from_a_shared_library},
         {"missing library", dynamic_loader_rejects_missing_library_before_runtime_start},
         {"library filename validation", dynamic_loader_requires_a_complete_library_filename},
+        {"same-type library reuse", dynamic_loader_reuses_same_type_with_same_library},
         {"cross-category library reuse", dynamic_loader_rejects_cross_category_library_reuse},
         {"JSON dynamic assembly", json_assembles_plugins_end_to_end},
     };

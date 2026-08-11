@@ -1,0 +1,142 @@
+{
+  "runtime": {
+    "run_duration_ms": 2200,
+    "raw_queue_capacity": 32,
+    "control_queue_capacity": 64
+  },
+  "devices": [
+    {
+      "id": "machine-01",
+      "driver": "simulator_poll",
+      "library": "./libgateway_poll_simulator.so",
+      "driver_config": {
+        "latency_ms": 35
+      },
+      "connection": {},
+      "points": [
+        {
+          "name": "temperature",
+          "type": "double",
+          "unit": "C",
+          "address": {},
+          "scale": 1.0,
+          "offset": 0.0,
+          "minimum": -40.0,
+          "maximum": 120.0
+        },
+        {
+          "name": "pressure",
+          "type": "double",
+          "unit": "kPa",
+          "address": {},
+          "scale": 1.0,
+          "offset": 0.0
+        }
+      ]
+    },
+    {
+      "id": "vibration-feed",
+      "driver": "simulator_push",
+      "library": "./libgateway_push_simulator.so",
+      "driver_config": {
+        "interval_ms": 180
+      },
+      "connection": {},
+      "points": [
+        {
+          "name": "vibration_x",
+          "type": "double",
+          "unit": "g",
+          "address": {},
+          "scale": 1.0,
+          "offset": 0.0
+        },
+        {
+          "name": "vibration_y",
+          "type": "double",
+          "unit": "g",
+          "address": {},
+          "scale": 1.0,
+          "offset": 0.0
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "temperature-group",
+      "device_id": "machine-01",
+      "interval_ms": 300,
+      "timeout_ms": 150,
+      "points": ["temperature"]
+    },
+    {
+      "id": "pressure-group",
+      "device_id": "machine-01",
+      "interval_ms": 300,
+      "timeout_ms": 150,
+      "points": ["pressure"]
+    }
+  ],
+  "processors": [
+    {
+      "id": "temperature-alarm",
+      "type": "threshold",
+      "library": "./libgateway_threshold_processor.so",
+      "enabled": true,
+      "config": {
+        "input": "temperature",
+        "greater_than": 85.0,
+        "output": "temperature_alarm"
+      }
+    },
+    {
+      "id": "vibration-average",
+      "type": "window_average",
+      "library": "./libgateway_window_average_processor.so",
+      "enabled": true,
+      "config": {
+        "input": "vibration_x",
+        "window": 3,
+        "output": "vibration_x_avg"
+      }
+    },
+    {
+      "id": "vibration-rms",
+      "type": "inference",
+      "library": "./libgateway_inference_processor.so",
+      "enabled": true,
+      "config": {
+        "runner": "demo_rms",
+        "inputs": ["vibration_x", "vibration_y"],
+        "outputs": ["anomaly_score"]
+      }
+    }
+  ],
+  "event_publishers": [
+    {
+      "id": "console",
+      "type": "print",
+      "library": "./libgateway_print_event_publisher.so",
+      "enabled": true,
+      "config": {
+        "include_readings": true
+      }
+    }
+  ],
+  "device_control_sources": [
+    {
+      "id": "simulator-controls",
+      "type": "periodic_control",
+      "library": "./libgateway_periodic_control_source.so",
+      "enabled": true,
+      "config": {
+        "request_id_prefix": "simulation-control",
+        "device_ids": ["machine-01", "vibration-feed"],
+        "command": "print",
+        "interval_ms": 500,
+        "timeout_ms": 250
+      }
+    }
+  ]
+}
