@@ -94,6 +94,10 @@ add_library(gateway_core STATIC
     src/core/runtime.cpp
     src/core/scheduler.cpp
 )
+
+set_target_properties(gateway_core PROPERTIES
+    POSITION_INDEPENDENT_CODE ON)
+
 target_include_directories(gateway_core PUBLIC include)
 target_link_libraries(gateway_core PUBLIC Threads::Threads)
 target_link_libraries(gateway_core PRIVATE nlohmann_json::nlohmann_json)
