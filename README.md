@@ -41,7 +41,18 @@
 | 构建工具 | MinGW Make、Unix Make 等与生成器匹配的工具 |
 | 外部服务 | 默认配置不需要；只有实际启用 MQTT Publisher 时才需要 MQTT 服务器 |
 
-### 3. Windows + MinGW
+### 3. 下载
+```bash
+git clone --recursive https://github.com/LRs0ng/miniGateway.git
+```
+or
+```bash
+git clone https://github.com/LRs0ng/miniGateway.git
+cd miniGateway
+git submodule update --init --recursive
+```
+
+### 4. Windows + MinGW
 进入项目文件夹后：
 ```powershell
 mkdir build
@@ -50,7 +61,7 @@ cmake .. -G "MinGW Makefiles"
 mingw32-make
 ```
 
-### 4. linux
+### 5. linux
 安装必要环境：
 ```bash
 sudo apt-get update
@@ -63,7 +74,7 @@ cd build
 cmake ..
 make
 ```
-### 5、运行
+### 6、运行
 #### windows
 ```powershell
 .\miniGateway.exe
@@ -72,7 +83,7 @@ make
 ```bash
 ./miniGateway
 ```
-### 6. 使用 MQTT
+### 7. 使用 MQTT
 #### windows
 ```powershell
 cmake .. -G "MinGW Makefiles" -DGATEWAY_ENABLE_MQTT=ON -DGATEWAY_CONFIG="configs/defconfig_mqtt_windows.json"

@@ -92,7 +92,7 @@ public:
             const auto* detail = ::dlerror();
             throw std::runtime_error(
                 "dlopen failed for " + path_text(path_) +
-                (detail == nullptr ? std::string{} : ": " + detail));
+                (detail == nullptr ? std::string{} : std::string{": "} + detail));
         }
 #endif
     }
