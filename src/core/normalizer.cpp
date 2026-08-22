@@ -20,6 +20,8 @@ std::optional<bool> boolean_value(const Scalar& value) {
                 return item != 0;
             } else if constexpr (std::is_same_v<T, double>) {
                 return item != 0.0;
+            } else if constexpr (std::is_same_v<T, ByteArray>) {
+                return std::nullopt;
             } else {
                 if (item == "true" || item == "1") {
                     return true;
@@ -34,55 +36,59 @@ std::optional<bool> boolean_value(const Scalar& value) {
 }
 
 std::pair<Scalar, Quality> convert_value(
-    const Scalar& raw,
+    Scalar value,
     const PointConfig& config,
     Quality quality) {
     if (quality != Quality::Good) {
-        return {raw, quality};
+        return {std::move(value), quality};
     }
 
-    Scalar converted = raw;
     switch (config.type) {
         case ValueType::String:
-            converted = scalar_to_string(raw);
+            value = scalar_to_string(value);
+            break;
+        case ValueType::ByteArray:
+            if (!std::holds_alternative<ByteArray>(value)) {
+                return {std::move(value), Quality::DecodeError};
+            }
             break;
         case ValueType::Boolean: {
-            const auto value = boolean_value(raw);
-            if (!value) {
-                return {raw, Quality::DecodeError};
+            const auto boolean = boolean_value(value);
+            if (!boolean) {
+                return {std::move(value), Quality::DecodeError};
             }
-            converted = *value;
+            value = *boolean;
             break;
         }
         case ValueType::Double: {
-            const auto value = numeric_value(raw);
-            if (!value || !std::isfinite(*value)) {
-                return {raw, Quality::DecodeError};
+            const auto numeric = numeric_value(value);
+            if (!numeric || !std::isfinite(*numeric)) {
+                return {std::move(value), Quality::DecodeError};
             }
-            converted = *value * config.scale + config.offset;
+            value = *numeric * config.scale + config.offset;
             break;
         }
         case ValueType::Integer: {
-            const auto value = numeric_value(raw);
-            if (!value || !std::isfinite(*value)) {
-                return {raw, Quality::DecodeError};
+            const auto numeric = numeric_value(value);
+            if (!numeric || !std::isfinite(*numeric)) {
+                return {std::move(value), Quality::DecodeError};
             }
-            const auto scaled = *value * config.scale + config.offset;
+            const auto scaled = *numeric * config.scale + config.offset;
             if (scaled < static_cast<double>(std::numeric_limits<std::int64_t>::min()) ||
                 scaled > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
-                return {raw, Quality::OutOfRange};
+                return {std::move(value), Quality::OutOfRange};
             }
-            converted = static_cast<std::int64_t>(std::llround(scaled));
+            value = static_cast<std::int64_t>(std::llround(scaled));
             break;
         }
     }
 
-    const auto numeric = numeric_value(converted);
+    const auto numeric = numeric_value(value);
     if (numeric && ((config.minimum && *numeric < *config.minimum) ||
                     (config.maximum && *numeric > *config.maximum))) {
         quality = Quality::OutOfRange;
     }
-    return {std::move(converted), quality};
+    return {std::move(value), quality};
 }
 
 }  // namespace
@@ -138,7 +144,8 @@ Event Normalizer::normalize(RawBatch batch) {
             quality = Quality::Bad;
         } else {
             unit = point->second.unit;
-            auto converted = convert_value(value, point->second, quality);
+            auto converted = convert_value(
+                std::move(value), point->second, quality);
             value = std::move(converted.first);
             quality = converted.second;
         }

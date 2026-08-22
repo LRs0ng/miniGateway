@@ -12,13 +12,17 @@
 
 namespace gateway {
 
-using Scalar = std::variant<std::int64_t, double, bool, std::string>;
+// Binary values (for example, a camera snapshot) stay opaque to the core.
+// Publishers decide how to encode them for their transport.
+using ByteArray = std::vector<std::uint8_t>;
+using Scalar = std::variant<std::int64_t, double, bool, std::string, ByteArray>;
 
 enum class ValueType {
     Integer,
     Double,
     Boolean,
     String,
+    ByteArray,
 };
 
 enum class Quality {

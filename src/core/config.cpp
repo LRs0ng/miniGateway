@@ -269,6 +269,9 @@ ValueType value_type(const Json& value, std::string_view path) {
     if (name == "string") {
         return ValueType::String;
     }
+    if (name == "bytes" || name == "byte_array") {
+        return ValueType::ByteArray;
+    }
     fail(path, "unsupported value type '" + name + "'");
 }
 

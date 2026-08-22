@@ -23,6 +23,8 @@ std::optional<double> numeric_value(const Scalar& value) {
                 return item;
             } else if constexpr (std::is_same_v<T, bool>) {
                 return item ? 1.0 : 0.0;
+            } else if constexpr (std::is_same_v<T, ByteArray>) {
+                return std::nullopt;
             } else {
                 double result{};
                 const auto* begin = item.data();
@@ -49,6 +51,8 @@ std::string scalar_to_string(const Scalar& value) {
                 return stream.str();
             } else if constexpr (std::is_same_v<T, std::int64_t>) {
                 return std::to_string(item);
+            } else if constexpr (std::is_same_v<T, ByteArray>) {
+                return "<" + std::to_string(item.size()) + " bytes>";
             } else {
                 return item;
             }

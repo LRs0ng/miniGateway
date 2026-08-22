@@ -89,6 +89,15 @@ void append_json_scalar(std::ostringstream& output, const Scalar& value) {
                 }
             } else if constexpr (std::is_same_v<T, bool>) {
                 output << (item ? "true" : "false");
+            } else if constexpr (std::is_same_v<T, ByteArray>) {
+                output << '[';
+                for (std::size_t index = 0; index < item.size(); ++index) {
+                    if (index != 0) {
+                        output.put(',');
+                    }
+                    output << static_cast<unsigned>(item[index]);
+                }
+                output << ']';
             } else {
                 append_json_string(output, item);
             }
