@@ -34,7 +34,7 @@ For your first run, use the default configuration for your platform:
 - The Threshold, Window Average, and Inference processors process the collected data;
 - Print Event Publisher writes Events and Readings to the terminal;
 - Periodic Control Source sends control commands to the two simulators in turn;
-- The program stops automatically after approximately `2200 ms` and prints summary statistics.
+- The program stops automatically after approximately `10000 ms` and prints summary statistics.
 
 ### 2. Prerequisites
 

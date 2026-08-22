@@ -29,7 +29,7 @@
 - Threshold、Window Average 和 Inference 三个 Processor 处理采集结果；
 - Print Event Publisher 把 Event/Reading 输出到终端；
 - Periodic Control Source 轮流向两个 Simulator 发送控制指令；
-- 程序运行约 `2200 ms` 后自动停止并打印汇总统计。
+- 程序运行约 `10000 ms` 后自动停止并打印汇总统计。
 
 ### 2. 准备构建环境
 

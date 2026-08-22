@@ -2,14 +2,51 @@
 #include "gateway/plugin_registry.hpp"
 #include "gateway/runtime.hpp"
 
+#include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
 
 namespace {
+
+volatile std::sig_atomic_t shutdown_requested = 0;
+
+void request_stop(int) noexcept {
+    shutdown_requested = 1;
+}
+
+void install_signal_handlers() noexcept {
+    (void)std::signal(SIGINT, request_stop);
+    (void)std::signal(SIGTERM, request_stop);
+}
+
+void wait_for_shutdown(
+    const std::optional<std::chrono::milliseconds>& run_duration) {
+    constexpr auto check_interval = std::chrono::milliseconds{100};
+
+    if (!run_duration) {
+        while (shutdown_requested == 0) {
+            std::this_thread::sleep_for(check_interval);
+        }
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + *run_duration;
+    while (shutdown_requested == 0) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            return;
+        }
+        const auto next_check = now + check_interval;
+        std::this_thread::sleep_until(
+            next_check < deadline ? next_check : deadline);
+    }
+}
 
 std::filesystem::path default_config_path() {
     return std::filesystem::path{"config.json"};
@@ -22,6 +59,8 @@ int main(int argc, char** argv) {
         std::cerr << "usage: gateway_example [config_path]\n";
         return EXIT_FAILURE;
     }
+
+    install_signal_handlers();
 
     try {
         const auto config_path = argc == 2
@@ -46,7 +85,7 @@ int main(int argc, char** argv) {
             std::move(plugins.event_publishers),
             std::move(plugins.sources)};
         runtime.start();
-        std::this_thread::sleep_for(run_for);
+        wait_for_shutdown(run_for);
         runtime.stop();
 
         const auto stats = runtime.stats();

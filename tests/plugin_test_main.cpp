@@ -500,7 +500,8 @@ void json_assembles_plugins_end_to_end() {
     auto config = gateway::load_config(test_config_path());
     // Cover the 300 ms poll interval with margin, while staying below the
     // 500 ms control interval so only the initial request is deterministic.
-    config.run_duration = 450ms;
+    constexpr auto test_duration = 450ms;
+    config.run_duration = test_duration;
 
     gateway::PluginRegistry registry;
     load_plugins(registry, config);
@@ -519,7 +520,7 @@ void json_assembles_plugins_end_to_end() {
     {
         CoutCapture capture;
         runtime.start();
-        std::this_thread::sleep_for(config.run_duration);
+        std::this_thread::sleep_for(test_duration);
         runtime.stop();
         CHECK(capture.text().find("device=") != std::string::npos);
     }

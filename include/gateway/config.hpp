@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,7 +22,8 @@ struct PluginConfig {
 };
 
 struct ApplicationConfig {
-    std::chrono::milliseconds run_duration{1000};
+    // No duration means that the process runs until it receives a stop signal.
+    std::optional<std::chrono::milliseconds> run_duration;
     GatewayConfig gateway;
     std::vector<PluginConfig> processors;
     std::vector<PluginConfig> event_publishers;

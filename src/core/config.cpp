@@ -430,8 +430,11 @@ ApplicationConfig parse_application_config(const Json& root) {
 
     ApplicationConfig config;
     const auto& runtime = object_member(root, "runtime", "root");
-    config.run_duration = milliseconds_member(
-        runtime, "run_duration_ms", "root.runtime", true);
+    const auto run_duration = runtime.find("run_duration_ms");
+    if (run_duration != runtime.end() && !run_duration->is_null()) {
+        config.run_duration = milliseconds_member(
+            runtime, "run_duration_ms", "root.runtime", true);
+    }
     config.gateway.raw_queue_capacity = size_member(
         runtime, "raw_queue_capacity", "root.runtime", true);
     const auto control_capacity = runtime.find("control_queue_capacity");

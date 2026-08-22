@@ -1,6 +1,6 @@
 {
   "runtime": {
-    "run_duration_ms": 2200,
+    "run_duration_ms": 10000,
     "raw_queue_capacity": 32,
     "control_queue_capacity": 64
   },

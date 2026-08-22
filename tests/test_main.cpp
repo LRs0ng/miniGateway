@@ -228,6 +228,53 @@ void normalizer_converts_values_and_quality() {
     CHECK(stats.bad_readings == 6);
 }
 
+void normalizer_preserves_byte_arrays() {
+    gateway::GatewayConfig config;
+    gateway::DeviceConfig device;
+    device.id = "camera-1";
+    auto snapshot = point("snapshot");
+    snapshot.type = gateway::ValueType::ByteArray;
+    device.points.push_back(std::move(snapshot));
+    config.devices.push_back(std::move(device));
+
+    gateway::RawBatch batch{
+        .device_id = "camera-1",
+        .source = "camera",
+        .samples = {{
+            .point = "snapshot",
+            .value = gateway::ByteArray{0x00U, 0x7fU, 0xffU},
+            .status = gateway::Quality::Good,
+            .source_time_ns = 123,
+        }},
+    };
+
+    gateway::Normalizer normalizer{config};
+    const auto event = normalizer.normalize(std::move(batch));
+    const auto* reading = gateway::find_reading(event, "snapshot");
+    CHECK(reading != nullptr);
+    CHECK(reading->quality == Quality::Good);
+    CHECK(std::get<gateway::ByteArray>(reading->value) ==
+          gateway::ByteArray({0x00U, 0x7fU, 0xffU}));
+    CHECK(!gateway::numeric_value(reading->value).has_value());
+    CHECK(gateway::scalar_to_string(reading->value) == "<3 bytes>");
+
+    gateway::RawBatch invalid_batch{
+        .device_id = "camera-1",
+        .source = "camera",
+        .samples = {{
+            .point = "snapshot",
+            .value = std::string{"not binary"},
+            .status = gateway::Quality::Good,
+            .source_time_ns = 124,
+        }},
+    };
+    const auto invalid_event = normalizer.normalize(std::move(invalid_batch));
+    const auto* invalid_reading =
+        gateway::find_reading(invalid_event, "snapshot");
+    CHECK(invalid_reading != nullptr);
+    CHECK(invalid_reading->quality == Quality::DecodeError);
+}
+
 class ThrowingProcessor final : public gateway::IDataProcessor {
 public:
     void process(Event&, gateway::ProcessingContext&) override {
@@ -1610,7 +1657,8 @@ constexpr std::string_view valid_config = R"json(
 
 void config_parser_preserves_generic_plugin_specs() {
     const auto config = gateway::parse_config(valid_config, "config-test");
-    CHECK(config.run_duration == 25ms);
+    CHECK(config.run_duration.has_value());
+    CHECK(*config.run_duration == 25ms);
     CHECK(config.gateway.raw_queue_capacity == 4);
     CHECK(config.gateway.control_queue_capacity == 3);
     CHECK(config.gateway.devices.size() == 1);
@@ -1632,6 +1680,37 @@ void config_parser_preserves_generic_plugin_specs() {
           "unrecognized_control_source");
     CHECK(config.device_control_sources.front().settings_json.find("kept") !=
           std::string::npos);
+
+    std::string bytes_config{valid_config};
+    const auto type = bytes_config.find("\"type\": \"double\"");
+    CHECK(type != std::string::npos);
+    bytes_config.replace(type, std::string{"\"type\": \"double\""}.size(),
+                         "\"type\": \"bytes\"");
+    const auto parsed_bytes = gateway::parse_config(bytes_config, "bytes-test");
+    CHECK(parsed_bytes.gateway.devices.front().points.front().type ==
+          gateway::ValueType::ByteArray);
+
+    std::string long_running_config{valid_config};
+    constexpr std::string_view duration_field{
+        "\"run_duration_ms\": 25, "};
+    const auto duration = long_running_config.find(duration_field);
+    CHECK(duration != std::string::npos);
+    long_running_config.erase(duration, duration_field.size());
+    const auto parsed_long_running = gateway::parse_config(
+        long_running_config, "long-running-test");
+    CHECK(!parsed_long_running.run_duration.has_value());
+
+    std::string null_duration_config{valid_config};
+    const auto duration_value = null_duration_config.find(
+        "\"run_duration_ms\": 25");
+    CHECK(duration_value != std::string::npos);
+    null_duration_config.replace(
+        duration_value,
+        std::string_view{"\"run_duration_ms\": 25"}.size(),
+        "\"run_duration_ms\": null");
+    const auto parsed_null_duration = gateway::parse_config(
+        null_duration_config, "null-duration-test");
+    CHECK(!parsed_null_duration.run_duration.has_value());
 }
 
 void config_parser_rejects_invalid_cross_references() {
@@ -1653,7 +1732,8 @@ void config_parser_rejects_invalid_cross_references() {
 
 void config_loader_reads_repository_config() {
     const auto config = gateway::load_config(GATEWAY_TEST_CONFIG_PATH);
-    CHECK(config.run_duration == 2200ms);
+    CHECK(config.run_duration.has_value());
+    CHECK(*config.run_duration == 10000ms);
     CHECK(config.gateway.raw_queue_capacity == 32);
     CHECK(config.gateway.control_queue_capacity == 64);
     CHECK(config.gateway.devices.size() == 2);
@@ -1690,6 +1770,7 @@ int main() {
         {"control dispatcher deadline", control_dispatcher_skips_driver_for_expired_deadline},
         {"control dispatcher serialization", control_dispatcher_serializes_io_and_maps_driver_errors},
         {"normalizer", normalizer_converts_values_and_quality},
+        {"normalizer byte arrays", normalizer_preserves_byte_arrays},
         {"pipeline isolation", pipeline_isolates_processor_failures},
         {"pipeline control sink", pipeline_injects_nonblocking_control_sink},
         {"generic plugin registry", registry_creates_only_enabled_generic_plugins},
